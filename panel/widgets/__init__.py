@@ -32,7 +32,7 @@ How to use Panel widgets in 4 simple steps
 For more detail see the Getting Started Guide
 https://panel.holoviz.org/getting_started/index.html
 """
-from .base import CompositeWidget, Widget  # noqa
+from .base import CompositeWidget, Widget, WidgetBase  # noqa
 from .button import Button, MenuButton, Toggle  # noqa
 from .codeeditor import CodeEditor  # noqa
 from .debugger import Debugger  # noqa
@@ -45,8 +45,9 @@ from .indicators import (  # noqa
 from .input import (  # noqa
     ArrayInput, Checkbox, ColorPicker, DatePicker, DateRangePicker,
     DatetimeInput, DatetimePicker, DatetimeRangeInput, DatetimeRangePicker,
-    FileInput, FloatInput, IntInput, LiteralInput, NumberInput, PasswordInput,
-    Spinner, StaticText, Switch, TextAreaInput, TextInput,
+    FileDropper, FileInput, FloatInput, IntInput, LiteralInput, NumberInput,
+    PasswordInput, Spinner, StaticText, Switch, TextAreaInput, TextInput,
+    TimePicker,
 )
 from .misc import FileDownload, JSONEditor, VideoStream  # noqa
 from .player import DiscretePlayer, Player  # noqa
@@ -68,13 +69,11 @@ from .texteditor import TextEditor  # noqa
 from .widget import widget  # noqa
 
 __all__ = (
-    "Ace",
     "ArrayInput",
     "AutocompleteInput",
     "BooleanStatus",
     "Button",
     "ButtonIcon",
-    "ChatBox",
     "Checkbox",
     "CheckBoxGroup",
     "CheckButtonGroup",
@@ -100,6 +99,7 @@ __all__ = (
     "EditableIntSlider",
     "EditableRangeSlider",
     "FileDownload",
+    "FileDropper",
     "FileInput",
     "FileSelector",
     "FloatInput",
@@ -137,6 +137,7 @@ __all__ = (
     "TextEditor",
     "TextInput",
     "TextToSpeech",
+    "TimePicker",
     "Toggle",
     "ToggleGroup",
     "ToggleIcon",

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import ClassVar, List
+from typing import ClassVar
 
 import param
 
@@ -34,6 +34,14 @@ STATUS = [
 class FloatPanel(ListLike, ReactiveHTML):
     """
     Float provides a floating panel layout.
+
+    Reference: https://panel.holoviz.org/reference/layouts/FloatPanel.html
+
+    :Example:
+
+    >>> import panel as pn
+    >>> pn.extension("floatpanel")
+    >>> pn.layout.FloatPanel("**I can float**!", position="center", width=300).servable()
     """
 
     config = param.Dict({}, doc="""
@@ -186,7 +194,7 @@ class FloatPanel(ListLike, ReactiveHTML):
         }
     }
 
-    _stylesheets: ClassVar[List[str]] = [
+    _stylesheets: ClassVar[list[str]] = [
         f'{CDN_DIST}css/floatpanel.css'
     ]
 

@@ -17,28 +17,27 @@ from weakref import WeakKeyDictionary
 
 import param
 
-from bokeh.core.has_props import _default_resolver
-from bokeh.document import Document
-from bokeh.model import Model
-from bokeh.settings import settings as bk_settings
 from pyviz_comms import (
     JupyterCommManager as _JupyterCommManager, extension as _pyviz_extension,
 )
 
+from .__version import __version__
 from .io.logging import panel_log_handler
 from .io.state import state
 from .util import param_watchers
 
-__version__ = str(param.version.Version(
-    fpath=__file__, archive_commit="$Format:%h$", reponame="panel"))
-
-_LOCAL_DEV_VERSION = any(v in __version__ for v in ('post', 'dirty')) and not state._is_pyodide
+_LOCAL_DEV_VERSION = (
+    any(v in __version__ for v in ('post', 'dirty'))
+    and not state._is_pyodide
+    and 'PANEL_DOC_BUILD' not in os.environ
+)
 
 #---------------------------------------------------------------------
 # Public API
 #---------------------------------------------------------------------
 
 _PATH = os.path.abspath(os.path.dirname(__file__))
+_config_uninitialized = True
 
 def validate_config(config, parameter, value):
     """
@@ -375,7 +374,9 @@ class _config(_base_config):
         try:
             yield
         finally:
-            self.param.update(**dict(values))
+            new = self.param.values()
+            restore = {k: v for k, v in values if v is not new.get(k)}
+            self.param.update(**restore)
             for k, v in overrides:
                 setattr(self, k+'_', v)
 
@@ -431,7 +432,7 @@ class _config(_base_config):
         ensure that even on first access mutable parameters do not
         end up being modified.
         """
-        if attr in ('_param__private', '_globals', '_parameter_set', '__class__', 'param'):
+        if _config_uninitialized or attr in ('_param__private', '_globals', '_parameter_set', '__class__', 'param'):
             return super().__getattribute__(attr)
 
         from .io.state import state
@@ -617,6 +618,7 @@ else:
 _config._parameter_set = set(_params)
 config = _config(**{k: None if p.allow_None else getattr(_config, k)
                     for k, p in _params.items() if k != 'name'})
+_config_uninitialized = False
 
 class panel_extension(_pyviz_extension):
     """
@@ -659,6 +661,7 @@ class panel_extension(_pyviz_extension):
         'codeeditor': 'panel.models.ace',
         'deckgl': 'panel.models.deckgl',
         'echarts': 'panel.models.echarts',
+        'filedropper': 'panel.models.file_dropper',
         'ipywidgets': 'panel.io.ipywidget',
         'jsoneditor': 'panel.models.jsoneditor',
         'katex': 'panel.models.katex',
@@ -679,11 +682,12 @@ class panel_extension(_pyviz_extension):
     _globals = {
         'deckgl': ['deck'],
         'echarts': ['echarts'],
+        'filedropper': ['FilePond'],
         'floatpanel': ['jsPanel'],
         'gridstack': ['GridStack'],
         'katex': ['katex'],
         'mathjax': ['MathJax'],
-        'perspective': ['perspective'],
+        'perspective': ["customElements.get('perspective-viewer')"],
         'plotly': ['Plotly'],
         'tabulator': ['Tabulator'],
         'terminal': ['Terminal', 'xtermjs'],
@@ -697,6 +701,10 @@ class panel_extension(_pyviz_extension):
     _comms_detected_before = False
 
     def __call__(self, *args, **params):
+        from bokeh.core.has_props import _default_resolver
+        from bokeh.model import Model
+        from bokeh.settings import settings as bk_settings
+
         from .reactive import ReactiveHTML, ReactiveHTMLMetaclass
         reactive_exts = {
             v._extension_name: v for k, v in param.concrete_descendents(ReactiveHTML).items()
@@ -742,8 +750,8 @@ class panel_extension(_pyviz_extension):
                     state._extensions.append(arg)
                 ReactiveHTMLMetaclass._loaded_extensions.add(arg)
             else:
-                self.param.warning('%s extension not recognized and '
-                                   'will be skipped.' % arg)
+                self.param.warning(f'{arg} extension not recognized and '
+                                   'will be skipped.')
 
         for k, v in params.items():
             if k == 'design' and isinstance(v, str):
@@ -763,9 +771,8 @@ class panel_extension(_pyviz_extension):
                 setattr(config, k, designs[v])
             elif k in ('css_files', 'raw_css', 'global_css'):
                 if not isinstance(v, list):
-                    raise ValueError('%s should be supplied as a list, '
-                                     'not as a %s type.' %
-                                     (k, type(v).__name__))
+                    raise ValueError(f'{k} should be supplied as a list, '
+                                     f'not as a {type(v).__name__} type.')
                 existing = getattr(config, k)
                 existing.extend([new for new in v if new not in existing])
             elif k == 'js_files':
@@ -833,8 +840,7 @@ class panel_extension(_pyviz_extension):
             else:
                 with param.logging_level('ERROR'):
                     hv.plotting.Renderer.load_nb(config.inline)
-                    if hasattr(hv.plotting.Renderer, '_render_with_panel'):
-                        nb_loaded = True
+                    nb_loaded = True
 
         # Disable simple ids, old state and multiple tabs in notebooks can cause IDs to clash
         bk_settings.simple_ids.set_value(False)
@@ -850,6 +856,7 @@ class panel_extension(_pyviz_extension):
     @staticmethod
     def _display_globals():
         if config.browser_info and state.browser_info:
+            from bokeh.document import Document
             doc = Document()
             comm = state._comm_manager.get_server_comm()
             model = state.browser_info._render_model(doc, comm)

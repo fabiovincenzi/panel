@@ -11,8 +11,7 @@ import uuid
 from functools import partial
 from pathlib import Path, PurePath
 from typing import (
-    IO, TYPE_CHECKING, Any, ClassVar, Dict, List, Literal, Optional, Tuple,
-    Type,
+    IO, TYPE_CHECKING, Any, ClassVar, Literal, Optional,
 )
 
 import jinja2
@@ -58,7 +57,7 @@ if TYPE_CHECKING:
     from jinja2 import Template as _Template
     from pyviz_comms import Comm
 
-    from ..io.location import Location
+    from ..io.location.base import Location
     from ..io.resources import ResourcesType
 
 
@@ -91,20 +90,20 @@ class BaseTemplate(param.Parameterized, MimeRenderMixin, ServableMixin, Resource
                                 constant=True, is_instance=False, instantiate=False)
 
     # Dictionary of property overrides by Viewable type
-    modifiers: ClassVar[Dict[Type[Viewable], Dict[str, Any]]] = {}
+    modifiers: ClassVar[dict[type[Viewable], dict[str, Any]]] = {}
 
     #############
     # Resources #
     #############
 
     # pathlib.Path pointing to local CSS file(s)
-    _css: ClassVar[Path | str | List[Path | str] | None] = None
+    _css: ClassVar[Path | str | list[Path | str] | None] = None
 
     # pathlib.Path pointing to local JS file(s)
-    _js: ClassVar[Path | str | List[Path | str] | None] = None
+    _js: ClassVar[Path | str | list[Path | str] | None] = None
 
     # External resources
-    _resources: ClassVar[Dict[str, Dict[str, str]]] = {
+    _resources: ClassVar[dict[str, dict[str, str]]] = {
         'css': {}, 'js': {}, 'js_modules': {}, 'tarball': {}
     }
 
@@ -117,8 +116,8 @@ class BaseTemplate(param.Parameterized, MimeRenderMixin, ServableMixin, Resource
         config_params = {
             p: v for p, v in params.items() if p in _base_config.param
         }
-        self._render_items: Dict[str, Tuple[Renderable, List[str]]]  = {}
-        self._render_variables: Dict[str, Any] = {}
+        self._render_items: dict[str, tuple[Renderable, list[str]]]  = {}
+        self._render_variables: dict[str, Any] = {}
         super().__init__(**{
             p: v for p, v in params.items() if p not in _base_config.param or p == 'name'
         })
@@ -133,7 +132,8 @@ class BaseTemplate(param.Parameterized, MimeRenderMixin, ServableMixin, Resource
             self.nb_template = _env.from_string(nb_template)
         else:
             self.nb_template = nb_template or self.template
-        self._documents: List[Document] = []
+        self._documents: list[Document] = []
+        self._refs: dict[Document, str] = {}
         self._server = None
         self._layout = self._build_layout()
         self._setup_design()
@@ -173,19 +173,22 @@ class BaseTemplate(param.Parameterized, MimeRenderMixin, ServableMixin, Resource
         ])
         return f'{type(self).__name__}{spacer}{objs}'
 
-    def _apply_root(self, name: str, model: Model, tags: List[str]) -> None:
+    def _apply_root(self, name: str, model: Model, tags: list[str]) -> None:
         pass
 
     def _server_destroy(self, session_context: BokehSessionContext):
         doc = session_context._document
         if doc in state._templates:
             del state._templates[doc]
+        ref = self._refs.pop(doc, None)
+        if ref:
+            state._fake_roots.remove(ref)
         self._documents.remove(doc)
 
     def _init_doc(
         self, doc: Optional[Document] = None, comm: Optional[Comm] = None,
         title: Optional[str] = None, notebook: bool = False,
-        location: bool | Location=True
+        location: bool | Location = True
     ):
         # Initialize document
         document: Document = doc or curdoc_locked()
@@ -216,9 +219,9 @@ class BaseTemplate(param.Parameterized, MimeRenderMixin, ServableMixin, Resource
         stylesheets, sizing_modes = {}, {}
         tracked_models = set()
         for name, (obj, tags) in self._render_items.items():
-
             # Render root without pre-processing
-            model = obj.get_root(document, comm, preprocess=False)
+            with config.set(design=self.design):
+                model = obj.get_root(document, comm, preprocess=False)
             model.name = name
             model.tags = model.tags + [tag for tag in tags if tag not in model.tags]
             mref = model.ref['id']
@@ -280,7 +283,7 @@ class BaseTemplate(param.Parameterized, MimeRenderMixin, ServableMixin, Resource
 
     def _repr_mimebundle_(
         self, include=None, exclude=None
-    ) -> Tuple[Dict[str, str], Dict[str, Dict[str, str]]] | None:
+    ) -> tuple[dict[str, str], dict[str, dict[str, str]]] | None:
         loaded = panel_extension._loaded
         if not loaded and 'holoviews' in sys.modules:
             import holoviews as hv
@@ -481,7 +484,7 @@ class BaseTemplate(param.Parameterized, MimeRenderMixin, ServableMixin, Resource
         location: bool | Location = True
     ) -> Document:
         """
-        Returns a servable bokeh Document with the panel attached
+        Returns a servable Document with the template attached.
 
         Arguments
         ---------
@@ -497,14 +500,14 @@ class BaseTemplate(param.Parameterized, MimeRenderMixin, ServableMixin, Resource
         Returns
         -------
         doc : bokeh.Document
-          The Bokeh document the panel was attached to
+          The Bokeh document the panel was attached to.
         """
         return self._init_doc(doc, title=title, location=location)
 
     def servable(
-        self, title: Optional[str] = None, location: bool | 'Location' = True,
+        self, title: Optional[str] = None, location: bool | Location = True,
         area: str = 'main', target: Optional[str] = None
-    ) -> 'BaseTemplate':
+    ) -> BaseTemplate:
         """
         Serves the template and returns self to allow it to display
         itself in a notebook context.
@@ -527,7 +530,7 @@ class BaseTemplate(param.Parameterized, MimeRenderMixin, ServableMixin, Resource
 
         Returns
         -------
-        The template
+        The template object
         """
         if curdoc_locked().session_context and config.template:
             raise RuntimeError(
@@ -572,7 +575,7 @@ class TemplateActions(ReactiveHTML):
 
     _template: ClassVar[str] = ""
 
-    _scripts: ClassVar[Dict[str, List[str] | str]] = {
+    _scripts: ClassVar[dict[str, list[str] | str]] = {
         'open_modal': ["""
           document.getElementById('pn-Modal').style.display = 'block'
           window.dispatchEvent(new Event('resize'));
@@ -939,7 +942,7 @@ class Template(BaseTemplate):
 
     def __init__(
         self, template: str | _Template, nb_template: str | _Template | None = None,
-        items: Optional[Dict[str, Any]] = None, **params
+        items: Optional[dict[str, Any]] = None, **params
     ):
         super().__init__(template=template, nb_template=nb_template, items=items, **params)
         items = {} if items is None else items
@@ -950,7 +953,7 @@ class Template(BaseTemplate):
     # Public API
     #----------------------------------------------------------------
 
-    def add_panel(self, name: str, panel: Viewable, tags: List[str] = []) -> None:
+    def add_panel(self, name: str, panel: Viewable, tags: list[str] = []) -> None:
         """
         Add panels to the Template, which may then be referenced by
         the given name using the jinja2 embed macro.
@@ -963,10 +966,10 @@ class Template(BaseTemplate):
           A Panel component to embed in the template.
         """
         if name in self._render_items:
-            raise ValueError('The name %s has already been used for '
+            raise ValueError(f'The name {name} has already been used for '
                              'another panel. Ensure each panel '
                              'has a unique name by which it can be '
-                             'referenced in the template.' % name)
+                             'referenced in the template.')
         self._render_items[name] = (_panel(panel), tags)
         self._layout[0].object = repr(self) # type: ignore
 
@@ -983,8 +986,8 @@ class Template(BaseTemplate):
           Any valid Jinja2 variable type.
         """
         if name in self._render_variables:
-            raise ValueError('The name %s has already been used for '
+            raise ValueError(f'The name {name} has already been used for '
                              'another variable. Ensure each variable '
                              'has a unique name by which it can be '
-                             'referenced in the template.' % name)
+                             'referenced in the template.')
         self._render_variables[name] = value

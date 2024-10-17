@@ -59,7 +59,7 @@ def test_widgets_are_in_reference_gallery():
 @ref_available
 def test_panes_are_in_reference_gallery():
     exceptions = {
-        "PaneBase", "YT", "RGGPlot", "Interactive", "ICO", "Image",
+        "PaneBase", "Pane", "YT", "RGGPlot", "Interactive", "ICO", "Image",
         "IPyLeaflet", "ParamFunction", "ParamMethod", "ParamRef"
     }
     docs = {f.with_suffix("").name for f in (REF_PATH / "panes").iterdir()}
@@ -71,6 +71,43 @@ def test_panes_are_in_reference_gallery():
     panes = set(filter(is_panel_pane, dir(pn.pane)))
     assert panes - exceptions - docs == set()
 
+
+def find_indexed(index):
+    indexed = []
+    toctree = False
+    for line in index.read_text(encoding="utf-8").split('\n'):
+        if line == '```{toctree}':
+            toctree = True
+        elif not toctree:
+            continue
+        elif line.startswith('```'):
+            toctree = False
+        elif line and not line.startswith(':'):
+            if '<' in line:
+                line = line[line.index('<')+1:].rstrip('>')
+            indexed.append(line)
+    return indexed
+
+@doc_available
+@pytest.mark.parametrize(
+    "doc_file", doc_files, ids=[str(f.relative_to(DOC_PATH)) for f in doc_files]
+)
+def test_markdown_indexed(doc_file):
+    # Check all non-index and example files are indexed
+    if str(doc_file).endswith('index.md') or doc_file.parent.name == 'examples':
+        return
+    index_page = doc_file.parent / 'index.md'
+    filename = doc_file.name[:-3]
+    if index_page.is_file():
+        indexed = find_indexed(index_page)
+        assert filename in indexed
+    else:
+        parent_name = doc_file.parent.name
+        index_page = doc_file.parent.parent / f'{parent_name}.md'
+        if not index_page.is_file():
+            index_page = doc_file.parent.parent / 'index.md'
+        indexed = find_indexed(index_page)
+        assert f'{parent_name}/{filename}' in indexed
 
 @doc_available
 @pytest.mark.parametrize(
@@ -101,4 +138,29 @@ def test_markdown_codeblocks(file, tmp_path):
     with open(mod, 'w', encoding='utf-8') as f:
         f.writelines(lines)
 
-    runpy.run_path(mod)
+    runpy.run_path(str(mod))
+
+
+@doc_available
+@pytest.mark.parametrize(
+    "file", doc_files, ids=[str(f.relative_to(DOC_PATH)) for f in doc_files]
+)
+def test_colon_blocks_symmetric(file):
+    stack = []
+    for i, line in enumerate(file.read_text(encoding='utf-8').splitlines(), 1):
+        if ':::::' in line:
+            # Not checking triple nesting
+            stack.clear()
+            break
+        elif '::::' in line:
+            if stack:
+                assert stack[-1] == '::::', f'Expected ::: on line {i}, found ::::'
+                stack.pop()
+            else:
+                stack.append('::::')
+        elif ':::' in line:
+            if not stack or stack[-1] == '::::':
+                stack.append(':::')
+            else:
+                stack.pop()
+    assert not stack, 'Colon blocks were not symmetric, ensure all blocks were closed'

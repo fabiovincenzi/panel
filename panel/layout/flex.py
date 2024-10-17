@@ -51,13 +51,13 @@ class FlexBox(ListLike, ReactiveHTML):
         'nowrap', 'wrap', 'wrap-reverse'], doc="""
         Whether and how to wrap items in the flex container.""")
 
+    gap = param.String(default='', doc="""
+        Defines the spacing between flex items, supporting various units (px, em, rem, %, vw/vh).""")
+
     justify_content = param.Selector(default='flex-start', objects=[
         'flex-start', 'flex-end', 'center', 'space-between', 'space-around',
         'space-evenly', 'start', 'end', 'left', 'right'], doc="""
         Defines the alignment along the main axis.""")
-
-    gap = param.String(default='', doc="""
-        Defines the spacing between flex items, supporting various units (px, em, rem, %, vw/vh).""")
 
     _template = (Path(__file__).parent / 'flexbox.html').read_text('utf-8')
 
@@ -71,9 +71,9 @@ class FlexBox(ListLike, ReactiveHTML):
                 params['sizing_mode'] = 'stretch_height'
         if objects:
             if 'objects' in params:
-                raise ValueError("A %s's objects should be supplied either "
+                raise ValueError(f"A {type(self).__name__}'s objects should be supplied either "
                                  "as positional arguments or as a keyword, "
-                                 "not both." % type(self).__name__)
+                                 "not both.")
             params['objects'] = [panel(pane) for pane in objects]
         elif 'objects' in params:
             objects = params['objects']

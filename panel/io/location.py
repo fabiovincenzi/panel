@@ -7,7 +7,7 @@ import json
 import urllib.parse as urlparse
 
 from typing import (
-    TYPE_CHECKING, Any, Callable, ClassVar, Dict, List, Mapping, Optional,
+    TYPE_CHECKING, Any, Callable, ClassVar, Mapping, Optional,
 )
 
 import param
@@ -15,6 +15,7 @@ import param
 from ..models.location import Location as _BkLocation
 from ..reactive import Syncable
 from ..util import edit_readonly, parse_query
+from .cache import is_equal
 from .document import create_doc_if_none_exists
 from .state import state
 
@@ -24,6 +25,47 @@ if TYPE_CHECKING:
     from bokeh.server.contexts import BokehSessionContext
     from pyviz_comms import Comm
 
+def _get_location_params(protocol: str|None, host: str| None, uri: str| None)->dict:
+    params = {}
+    href = ''
+    if protocol:
+        params['protocol'] = href = f'{protocol}:'
+    if host:
+        if host.startswith('::ffff:'):
+            host = host.replace('::ffff:', '')
+        elif host == '::1':
+            host = host.replace('::1', 'localhost')
+
+        href += f'//{host}'
+        if ':' in host:
+            params['hostname'], params['port'] = host.split(':')
+        else:
+            params['hostname'] = host
+    if uri:
+        search = hash = None
+
+        if uri.startswith("https,"):
+            uri = uri.replace("https,", "")
+
+        if uri.startswith("http"):
+            uri = urlparse.urlparse(uri).path
+
+        href += uri
+        if '?' in uri and '#' in uri:
+            params['pathname'], query = uri.split('?')
+            search, hash = query.split('#')
+        elif '?' in uri:
+            params['pathname'], search = uri.split('?')
+        elif '#' in uri:
+            params['pathname'], hash = uri.split('#')
+        else:
+            params['pathname'] = uri
+        if search:
+            params['search'] = f'?{search}'
+        if hash:
+            params['hash'] = f'#{hash}'
+    params['href'] = href
+    return params
 
 class Location(Syncable):
     """
@@ -70,33 +112,7 @@ class Location(Syncable):
         except ImportError:
             return cls()
 
-        params = {}
-        href = ''
-        if request.protocol:
-            params['protocol'] = href = f'{request.protocol}:'
-        if request.host:
-            href += f'//{request.host}'
-            if ':' in request.host:
-                params['hostname'], params['port'] = request.host.split(':')
-            else:
-                params['hostname'] = request.host
-        if request.uri:
-            search = hash = None
-            href += request.uri
-            if '?' in request.uri and '#' in request.uri:
-                params['pathname'], query = request.uri.split('?')
-                search, hash = query.split('#')
-            elif '?' in request.uri:
-                params['pathname'], search = request.uri.split('?')
-            elif '#' in request.uri:
-                params['pathname'], hash = request.uri.split('#')
-            else:
-                params['pathname'] = request.uri
-            if search:
-                params['search'] = f'?{search}'
-            if hash:
-                params['hash'] = f'#{hash}'
-        params['href'] = href
+        params = _get_location_params(request.protocol, request.host, request.uri)
         loc = cls()
         with edit_readonly(loc):
             loc.param.update(params)
@@ -164,9 +180,10 @@ class Location(Syncable):
                 except Exception:
                     pass
                 try:
-                    equal = v == getattr(p, pname)
+                    equal = is_equal(v, getattr(p, pname))
                 except Exception:
                     equal = False
+
                 if not equal:
                     mapped[pname] = v
             try:
@@ -176,7 +193,7 @@ class Location(Syncable):
                     on_error(mapped)
 
     def _update_query(
-        self, *events: param.parameterized.Event, query: Optional[Dict[str, Any]] = None
+        self, *events: param.parameterized.Event, query: Optional[dict[str, Any]] = None
     ) -> None:
         if self._syncing:
             return
@@ -200,7 +217,7 @@ class Location(Syncable):
             self._syncing = False
 
     @property
-    def query_params(self) -> Dict[str, Any]:
+    def query_params(self) -> dict[str, Any]:
         return parse_query(self.search)
 
     def update_query(self, **kwargs: Mapping[str, Any]) -> None:
@@ -209,8 +226,8 @@ class Location(Syncable):
         self.search = '?' + urlparse.urlencode(query)
 
     def sync(
-        self, parameterized: param.Parameterized, parameters: Optional[List[str] | Dict[str, str]] = None,
-        on_error: Optional[Callable[[Dict[str, Any]], None]] = None
+        self, parameterized: param.Parameterized, parameters: Optional[list[str] | dict[str, str]] = None,
+        on_error: Optional[Callable[[dict[str, Any]], None]] = None
     ) -> None:
         """
         Syncs the parameters of a Parameterized object with the query
@@ -251,7 +268,7 @@ class Location(Syncable):
             query[name] = v
         self._update_query(query=query)
 
-    def unsync(self, parameterized: param.Parameterized, parameters: Optional[List[str]] = None) -> None:
+    def unsync(self, parameterized: param.Parameterized, parameters: Optional[list[str]] = None) -> None:
         """
         Unsyncs the parameters of the Parameterized with the query
         params in the URL. If no parameters are supplied all

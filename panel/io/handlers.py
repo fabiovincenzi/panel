@@ -9,6 +9,7 @@ import pathlib
 import re
 import sys
 import traceback
+import urllib.parse as urlparse
 
 from contextlib import contextmanager
 from types import ModuleType
@@ -25,6 +26,7 @@ from bokeh.io.doc import curdoc, patch_curdoc, set_curdoc as bk_set_curdoc
 from bokeh.util.dependencies import import_required
 
 from ..config import config
+from .mime_render import MIME_RENDERERS
 from .profile import profile_ctx
 from .reload import record_modules
 from .state import state
@@ -33,6 +35,20 @@ log = logging.getLogger('panel.io.handlers')
 
 CELL_DISPLAY = []
 
+
+@contextmanager
+def _patch_ipython_display():
+    try:
+        import IPython
+        _orig_display = IPython.display
+        IPython.display.display = display
+    except Exception:
+        pass
+    yield
+    try:
+        IPython.display.display = _orig_display
+    except Exception:
+        pass
 
 @contextmanager
 def _monkeypatch_io(loggers: dict[str, Callable[..., None]]) -> dict[str, Any]:
@@ -65,7 +81,17 @@ def get_figure():
         return fig
 
 def display(*args, **kwargs):
-    CELL_DISPLAY.extend(args)
+    if kwargs.get('raw'):
+        for arg in args:
+            for mime_type in arg:
+                if mime_type in MIME_RENDERERS:
+                    out = MIME_RENDERERS[mime_type](arg[mime_type], {}, mime_type)
+                    CELL_DISPLAY.append(out)
+                    break
+            else:
+                CELL_DISPLAY.append(arg)
+    else:
+        CELL_DISPLAY.extend(args)
 
 def extract_code(
     filehandle: IO, supported_syntax: tuple[str, ...] = ('{pyodide}', 'python')
@@ -139,6 +165,8 @@ def capture_code_cell(cell):
     parses = False
     while not parses:
         try:
+            if not cell_out.strip():
+                raise SyntaxError
             ast.parse(cell_out)
             parses = True
         except SyntaxError:
@@ -159,7 +187,7 @@ def capture_code_cell(cell):
         return code
 
     # Remove code comments
-    if '#' in cell_out:
+    if '#' in cell_out and not cell_out.count('\n'):
         try:
             # To not remove "#000000"
             cell_tmp = cell_out[:cell_out.index('#')].rstrip()
@@ -198,7 +226,10 @@ def autoreload_handle_exception(handler, module, e):
 
     # Clean up module
     del sys.modules[module.__name__]
-    state.curdoc.modules._modules.remove(module)
+    try:
+        state.curdoc.modules._modules.remove(module)
+    except ValueError:
+        pass
 
     # Serve error
     e_msg = str(e).replace('\033[1m', '<b>').replace('\033[0m', '</b>')
@@ -208,7 +239,7 @@ def autoreload_handle_exception(handler, module, e):
         alert_type='danger', margin=5, sizing_mode='stretch_width'
     ).servable()
 
-def run_app(handler, module, doc, post_run=None):
+def run_app(handler, module, doc, post_run=None, allow_empty=False):
     try:
         old_doc = curdoc()
     except RuntimeError:
@@ -227,7 +258,7 @@ def run_app(handler, module, doc, post_run=None):
 
         # script is supposed to edit the doc not replace it
         if newdoc is not doc:
-            raise RuntimeError("%s at '%s' replaced the output document" % (handler._origin, handler._runner.path))
+            raise RuntimeError(f"{handler._origin} at '{handler._runner.path}' replaced the output document")
 
     try:
         state._launching.append(doc)
@@ -235,9 +266,25 @@ def run_app(handler, module, doc, post_run=None):
             with patch_curdoc(doc):
                 with profile_ctx(config.profiler) as sessions:
                     with record_modules(handler=handler):
-                        handler._runner.run(module, post_check)
-                        if post_run:
-                            post_run()
+                        runner = handler._runner
+                        if runner.error:
+                            from ..pane import Alert
+                            Alert(
+                                f'<b>{runner.error}</b>\n<pre style="overflow-y: auto">{runner.error_detail}</pre>',
+                                alert_type='danger', margin=5, sizing_mode='stretch_width'
+                            ).servable()
+                        else:
+                            handler._runner.run(module, post_check)
+                            if post_run:
+                                post_run()
+                if not doc.roots and not allow_empty and config.autoreload and doc not in state._templates:
+                    from ..pane import Alert
+                    Alert(
+                        ('<b>Application did not publish any contents</b>\n\n<span>'
+                        'Ensure you have marked items as servable or added models to '
+                        'the bokeh document manually.'),
+                        alert_type='danger', margin=5, sizing_mode='stretch_width'
+                    ).servable()
     finally:
         if config.profiler:
             try:
@@ -391,6 +438,13 @@ class PanelCodeHandler(CodeHandler):
         for f in PanelCodeHandler._io_functions:
             self._loggers[f] = self._make_io_logger(f)
 
+    def url_path(self) -> str | None:
+        if self.failed and not config.autoreload:
+            return None
+
+        # TODO should fix invalid URL characters
+        return '/' + os.path.splitext(os.path.basename(self._runner.path))[0]
+
     def modify_document(self, doc: 'Document'):
         if config.autoreload:
             path = self._runner.path
@@ -402,14 +456,15 @@ class PanelCodeHandler(CodeHandler):
 
         # If no module was returned it means the code runner has some permanent
         # unfixable problem, e.g. the configured source code has a syntax error
-        if module is None:
+        if module is None and not config.autoreload:
             return
 
         # One reason modules are stored is to prevent the module from being gc'd
         # before the document is. A symptom of a gc'd module is that its globals
         # become None. Additionally stored modules are used to provide correct
         # paths to custom models resolver.
-        doc.modules.add(module)
+        if module is not None:
+            doc.modules.add(module)
 
         run_app(self, module, doc)
 
@@ -506,6 +561,17 @@ class NotebookHandler(PanelCodeHandler):
             self._layout = {}
         return self._layout
 
+    def _compute_layout(self, spec, panels):
+        from ..pane import Plotly
+        params = {}
+        if 'width' in spec and 'height' in spec:
+            params['sizing_mode'] = 'stretch_both'
+        else:
+            params['sizing_mode'] = 'stretch_width'
+            if len(panels) == 1 and isinstance(panels[0], Plotly):
+                params['min_height'] = 300
+        return params
+
     def _render_template(self, doc, path):
         """Renders template containing cell outputs.
 
@@ -522,31 +588,29 @@ class NotebookHandler(PanelCodeHandler):
         """
         from ..config import config
         from ..layout import Column
+        from ..pane import panel
         from .state import state
 
         config.template = 'editable'
         persist = state._jupyter_kernel_context
         editable = 'editable' in state.session_args
+        reset = 'reset' in state.session_args
         if not (editable or persist):
             state.template.editable = False
-        state.template.title = os.path.splitext(os.path.basename(path))[0].title()
+        state.template.title = os.path.splitext(os.path.basename(path))[0].replace('_', ' ').title()
 
         layouts, outputs, cells = {}, {}, {}
-        for cell_id, out in state._cell_outputs.items():
-            if cell_id in self._layout.get('cells', {}):
+        for cell_id, objects in state._cell_outputs.items():
+            if reset:
+                spec = {}
+            elif cell_id in self._layout.get('cells', {}):
                 spec = self._layout['cells'][cell_id]
             else:
                 spec = state._cell_layouts[self].get(cell_id, {})
-            if 'width' in spec and 'height' in spec:
-                sizing_mode = 'stretch_both'
-            else:
-                sizing_mode = 'stretch_width'
-            pout = Column(
-                *(o for o in out if o is not None),
-                sizing_mode=sizing_mode
-            )
+            panels = [panel(obj) for obj in objects if obj is not None]
+            pout = Column(*panels, **self._compute_layout(spec, panels))
             for po in pout:
-                po.sizing_mode = sizing_mode
+                po.sizing_mode = pout.sizing_mode
             outputs[cell_id] = pout
             layouts[id(pout)] = spec
             cells[cell_id] = id(pout)
@@ -561,7 +625,7 @@ class NotebookHandler(PanelCodeHandler):
             cell_order = nb['metadata'].get('panel-cell-order', [])
         ordered = {}
         for cell_id in cell_order:
-            if cell_id not in cells:
+            if cell_id not in cells or reset:
                 continue
             obj_id = cells[cell_id]
             ordered[obj_id] = layouts[obj_id]
@@ -579,6 +643,13 @@ class NotebookHandler(PanelCodeHandler):
             layout=ordered,
             local_save=not bool(state._jupyter_kernel_context)
         )
+        if reset:
+            def unset_reset():
+                query = state.location.query_params
+                query.pop('reset', None)
+                search = urlparse.urlencode(query)
+                state.location.search = f'?{search}' if search else ''
+            state.onload(unset_reset)
         if persist:
             state.template.param.watch(self._update_position_metadata, 'layout')
         state._session_outputs[doc] = outputs
@@ -602,22 +673,24 @@ class NotebookHandler(PanelCodeHandler):
 
         # If no module was returned it means the code runner has some permanent
         # unfixable problem, e.g. the configured source code has a syntax error
-        if module is None:
+        if module is None and not config.autoreload:
             return
 
         # One reason modules are stored is to prevent the module from being gc'd
         # before the document is. A symptom of a gc'd module is that its globals
         # become None. Additionally stored modules are used to provide correct
         # paths to custom models resolver.
-        doc.modules.add(module)
+        if module is not None:
+            doc.modules.add(module)
 
         def post_run():
             if not (doc.roots or doc in state._templates or self._runner.error):
                 self._render_template(doc, path)
             state._cell_outputs.clear()
 
-        with set_env_vars(MPLBACKEND='agg'):
-            run_app(self, module, doc, post_run)
+        with _patch_ipython_display():
+            with set_env_vars(MPLBACKEND='agg'):
+                run_app(self, module, doc, post_run, allow_empty=True)
 
     def _update_position_metadata(self, event):
         """

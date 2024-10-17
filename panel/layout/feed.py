@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 from typing import (
-    TYPE_CHECKING, ClassVar, List, Mapping, Optional, Type,
+    TYPE_CHECKING, ClassVar, Mapping, Optional,
 )
 
 import param
 
-from ..models import Feed as PnFeed
-from ..models.feed import ScrollButtonClick
+from ..models.feed import Feed as PnFeed, ScrollButtonClick, ScrollLatestEvent
 from ..util import edit_readonly
 from .base import Column
 
@@ -20,6 +19,22 @@ if TYPE_CHECKING:
 
 
 class Feed(Column):
+    """
+    The `Feed` class inherits from the `Column` layout, thereby enabling the arrangement of
+    multiple panel objects within a vertical container. However, it restrictively manages the number
+    of objects displayed at any moment. This layout is particularly useful for efficiently
+    rendering a substantial number of objects.
+
+    Similar to `Column`, the `Feed` provides a list-like API, including methods such as `append`,
+    `extend`, `clear`, `insert`, `pop`, `remove`, and `__setitem__`. These methods facilitate
+    interactive updates and modifications to the layout.
+
+    Reference: https://panel.holoviz.org/reference/layouts/Feed.html
+
+    :Example:
+
+    >>> pn.Feed(some_widget, some_pane, some_python_object, ..., python_object_1002)
+    """
 
     load_buffer = param.Integer(default=50, bounds=(0, None), doc="""
         The number of objects loaded on each side of the visible objects.
@@ -43,7 +58,7 @@ class Feed(Column):
         Read-only upper and lower bounds of the currently visible feed objects.
         This list is automatically updated based on scrolling.""")
 
-    _bokeh_model: ClassVar[Type[Model]] = PnFeed
+    _bokeh_model: ClassVar[type[Model]] = PnFeed
 
     _direction = 'vertical'
 
@@ -62,6 +77,7 @@ class Feed(Column):
 
         super().__init__(*objects, **params)
         self._last_synced = None
+        self.param.watch(self._trigger_view_latest, 'objects')
 
     @param.depends("visible_range", "load_buffer", watch=True)
     def _trigger_get_objects(self):
@@ -82,6 +98,12 @@ class Feed(Column):
         )
         if top_trigger or bottom_trigger or invalid_trigger:
             self.param.trigger("objects")
+
+    def _trigger_view_latest(self, event):
+        if (event.type == 'triggered' or not self.view_latest or
+            not event.new or event.new[-1] in event.old):
+            return
+        self.scroll_to_latest()
 
     @property
     def _synced_range(self):
@@ -130,15 +152,12 @@ class Feed(Column):
         return super()._process_param_change(msg)
 
     def _get_objects(
-        self, model: Model, old_objects: List[Viewable], doc: Document,
+        self, model: Model, old_objects: list[Viewable], doc: Document,
         root: Model, comm: Optional[Comm] = None
     ):
-        from ..pane.base import RerenderError, panel
+        from ..pane.base import RerenderError
         new_models, old_models = [], []
         self._last_synced = self._synced_range
-
-        for i, pane in enumerate(self.objects):
-            self.objects[i] = panel(pane)
 
         for obj in old_objects:
             if obj not in self.objects:
@@ -162,7 +181,7 @@ class Feed(Column):
             new_models.append(child)
         return new_models, old_models
 
-    def _process_event(self, event: ScrollButtonClick) -> None:
+    def _process_event(self, event: ScrollButtonClick | None = None) -> None:
         """
         Process a scroll button click event.
         """
@@ -179,8 +198,17 @@ class Feed(Column):
         n_visible = self.visible_range[-1] - self.visible_range[0]
         with edit_readonly(self):
             # plus one to center on the last object
-            self.visible_range = (max(n - n_visible + 1, 0), n)
+            self.visible_range = (min(max(n - n_visible + 1, 0), n), n)
 
         with param.discard_events(self):
             # reset the buffers and loaded objects
             self.load_buffer = load_buffer
+
+    def scroll_to_latest(self):
+        """
+        Scrolls the Feed to the latest entry.
+        """
+        rerender = self._last_synced and self._last_synced[-1] < len(self.objects)
+        if rerender:
+            self._process_event()
+        self._send_event(ScrollLatestEvent, rerender=rerender)

@@ -17,7 +17,9 @@ except Exception:
     diskcache = None
 diskcache_available = pytest.mark.skipif(diskcache is None, reason="requires diskcache")
 
-from panel.io.cache import _find_hash_func, cache
+from panel.io.cache import (
+    _find_hash_func, _generate_hash, cache, is_equal,
+)
 from panel.io.state import set_curdoc, state
 from panel.tests.util import serve_and_wait
 
@@ -249,56 +251,52 @@ def test_per_session_cache_server(port):
 
     assert list(counts.values()) == [1, 1]
 
-@pytest.mark.xdist_group("cache")
 @diskcache_available
-def test_disk_cache():
+def test_disk_cache(tmp_path):
     global OFFSET
     OFFSET.clear()
-    fn = cache(function_with_args, to_disk=True)
+    fn = cache(function_with_args, to_disk=True, cache_path=tmp_path)
 
     assert fn(0, 0) == 0
-    assert pathlib.Path('./cache').exists()
-    assert list(pathlib.Path('./cache').glob('*'))
+    assert tmp_path.exists()
+    assert list(tmp_path.glob('*'))
     assert fn(0, 0) == 0
     fn.clear()
     assert fn(0, 0) == 1
 
-@pytest.mark.xdist_group("cache")
 @pytest.mark.parametrize('to_disk', (True, False))
-def test_cache_fifo(to_disk):
+def test_cache_fifo(to_disk, tmp_path):
     if to_disk and diskcache is None:
         pytest.skip('requires diskcache')
     global OFFSET
     OFFSET.clear()
-    fn = cache(function_with_args, max_items=2, policy='fifo', to_disk=to_disk)
+    fn = cache(function_with_args, max_items=2, policy='fifo', to_disk=to_disk, cache_path=tmp_path)
     assert fn(0, 0) == 0
     assert fn(0, 1) == 1
     assert fn(0, 0) == 0
     assert fn(0, 2) == 2 # (0, 0) should be evicted
     assert fn(0, 0) == 1
 
-@pytest.mark.xdist_group("cache")
 @pytest.mark.parametrize('to_disk', (True, False))
-def test_cache_lfu(to_disk):
+def test_cache_lfu(to_disk, tmp_path):
     if to_disk and diskcache is None:
         pytest.skip('requires diskcache')
     global OFFSET
     OFFSET.clear()
-    fn = cache(function_with_args, max_items=2, policy='lfu', to_disk=to_disk)
+    fn = cache(function_with_args, max_items=2, policy='lfu', to_disk=to_disk, cache_path=tmp_path)
     assert fn(0, 0) == 0
     assert fn(0, 0) == 0
     assert fn(0, 1) == 1
     assert fn(0, 2) == 2 # (0, 1) should be evicted
     assert fn(0, 1) == 2
 
-@pytest.mark.xdist_group("cache")
 @pytest.mark.parametrize('to_disk', (True, False))
-def test_cache_lru(to_disk):
+def test_cache_lru(to_disk, tmp_path):
     if to_disk and diskcache is None:
         pytest.skip('requires diskcache')
     global OFFSET
     OFFSET.clear()
-    fn = cache(function_with_args, max_items=3, policy='lru', to_disk=to_disk)
+    fn = cache(function_with_args, max_items=3, policy='lru', to_disk=to_disk, cache_path=tmp_path)
     assert fn(0, 0) == 0
     assert fn(0, 1) == 1
     assert fn(0, 2) == 2
@@ -307,19 +305,17 @@ def test_cache_lru(to_disk):
     assert fn(0, 0) == 0
     assert fn(0, 1) == 2
 
-@pytest.mark.xdist_group("cache")
 @pytest.mark.parametrize('to_disk', (True, False))
-def test_cache_ttl(to_disk):
+def test_cache_ttl(to_disk, tmp_path):
     if to_disk and diskcache is None:
         pytest.skip('requires diskcache')
     global OFFSET
     OFFSET.clear()
-    fn = cache(function_with_args, ttl=0.1, to_disk=to_disk)
+    fn = cache(function_with_args, ttl=0.1, to_disk=to_disk, cache_path=tmp_path)
     assert fn(0, 0) == 0
     time.sleep(0.2)
     assert fn(0, 0) == 1
 
-@pytest.mark.xdist_group("cache")
 def test_cache_on_undecorated_parameterized_method():
     class Model(param.Parameterized):
         data = param.Parameter(default=1)
@@ -339,3 +335,44 @@ def test_cache_on_undecorated_parameterized_method():
     assert model.expensive_calculation(2) == 4
 
     assert model.executions == 2
+
+DF1 = pd.DataFrame({"x": [1]})
+DF2 = pd.DataFrame({"y": [1]})
+
+def test_hash_on_simple_dataframes():
+    assert _generate_hash(DF1)!=_generate_hash(DF2)
+
+@pytest.mark.parametrize(["value", "other", "expected"], [
+    (None, None, True),
+    (True, False, False), (False, True, False), (False, False, True), (True, True, True),
+    (None, 1, False), (1, None, False), (1, 1, True), (1,2,False),
+    (None, "a", False), ("a", None, False), ("a", "a", True), ("a","b",False),
+    (1,"1", False),
+    (None, DF1, False), (DF1, None, False), (DF1, DF1, True), (DF1, DF1.copy(), True), (DF1,DF2,False),
+])
+def test_is_equal(value, other, expected):
+    assert is_equal(value, other)==expected
+
+def test_cache_clear_two_funcs():
+    # see https://github.com/holoviz/panel/issues/6777
+    @cache()
+    def get_data_1(a=[0]):
+        v = a[0]
+        a[0] = v+1
+        return v
+
+    @cache()
+    def get_data_2(b=[0]):
+        v = b[0]
+        b[0] = v+1
+        return v
+
+    assert get_data_1() == 0
+    assert get_data_2() == 0
+
+    get_data_1.clear()
+
+    assert get_data_1() == 1
+    assert get_data_2() == 0
+    assert get_data_1() == 1
+    assert get_data_2() == 0

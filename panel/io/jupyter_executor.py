@@ -6,9 +6,7 @@ import os
 import weakref
 
 from dataclasses import dataclass
-from typing import (
-    TYPE_CHECKING, Any, Dict, List, Union,
-)
+from typing import TYPE_CHECKING, Any, Union
 
 import tornado
 
@@ -38,9 +36,9 @@ if TYPE_CHECKING:
 @dataclass
 class _RequestProxy:
 
-    arguments: Dict[str, List[bytes]]
-    cookies: Dict[str, str]
-    headers: Dict[str, str | List[str]]
+    arguments: dict[str, list[bytes]]
+    cookies: dict[str, str]
+    headers: dict[str, str | list[str]]
 
 class Mimebundle:
 
@@ -75,7 +73,7 @@ class PanelExecutor(WSHandler):
 
     _tasks = set()
 
-    def __init__(self, path, token, root_url):
+    def __init__(self, path, token, root_url, resources='server'):
         self.path = path
         self.token = token
         self.root_url = root_url
@@ -89,8 +87,10 @@ class PanelExecutor(WSHandler):
         self.write_lock = tornado.locks.Lock()
         self._context = None
 
+        resources = os.environ.get('BOKEH_RESOURCES', resources)
+        root_url = self.root_url if resources == 'server' else None
         self.resources = Resources(
-            mode=os.environ.get('BOKEH_RESOURCES', 'server'), root_url=self.root_url,
+            mode=resources, root_url=root_url,
             path_versioner=StaticHandler.append_version, absolute=True
         )
         self._set_state()
@@ -101,7 +101,7 @@ class PanelExecutor(WSHandler):
             self.exception = e
             self.session = None
 
-    def _get_payload(self, token: str) -> Dict[str, Any]:
+    def _get_payload(self, token: str) -> dict[str, Any]:
         payload = get_token_payload(token)
         if ('cookies' in payload and 'headers' in payload
             and 'Cookie' not in payload['headers']):
@@ -181,7 +181,7 @@ class PanelExecutor(WSHandler):
         return session, runner.error_detail
 
     async def write_message(
-        self, message: Union[bytes, str, Dict[str, Any]],
+        self, message: Union[bytes, str, dict[str, Any]],
         binary: bool = False, locked: bool = True
     ) -> None:
         metadata = {'binary': binary}

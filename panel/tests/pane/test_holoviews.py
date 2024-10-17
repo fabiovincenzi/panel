@@ -1,8 +1,6 @@
 import datetime as dt
 import warnings
 
-from collections import OrderedDict
-
 import numpy as np
 import pytest
 
@@ -242,7 +240,7 @@ def test_holoviews_pane_inherits_design_stylesheets(document, comm):
 
     plotly_model = row.children[0]
 
-    assert len(plotly_model.stylesheets) == 5
+    assert len(plotly_model.stylesheets) == 6
 
 @hv_available
 def test_holoviews_widgets_from_dynamicmap(document, comm):
@@ -292,7 +290,7 @@ def test_holoviews_widgets_from_dynamicmap(document, comm):
 
     assert isinstance(widgets[5], DiscreteSlider)
     assert widgets[5].name == 'F'
-    assert widgets[5].options == OrderedDict([(str(v), v) for v in value_numeric_dim.values])
+    assert widgets[5].options == {str(v): v for v in value_numeric_dim.values}
     assert widgets[5].value == value_numeric_dim.default
 
 
@@ -473,7 +471,7 @@ def test_holoviews_widgets_from_holomap():
 
     assert isinstance(widgets[0], DiscreteSlider)
     assert widgets[0].name == 'X'
-    assert widgets[0].options == OrderedDict([(str(i), i) for i in range(3)])
+    assert widgets[0].options == {str(i): i for i in range(3)}
     assert widgets[0].value == 0
 
     assert isinstance(widgets[1], Select)
@@ -490,10 +488,11 @@ def test_holoviews_date_slider_widgets_from_holomap():
 
     assert isinstance(widgets[0], DiscreteSlider)
     assert widgets[0].name == 'X'
-    assert widgets[0].options == OrderedDict([
-        ('2016-01-01 00:00:00', dt.datetime(2016, 1, 1)),
-        ('2016-01-02 00:00:00', dt.datetime(2016, 1, 2)),
-        ('2016-01-03 00:00:00', dt.datetime(2016, 1, 3))])
+    assert widgets[0].options == {
+        '2016-01-01 00:00:00': dt.datetime(2016, 1, 1),
+        '2016-01-02 00:00:00': dt.datetime(2016, 1, 2),
+        '2016-01-03 00:00:00': dt.datetime(2016, 1, 3),
+    }
     assert widgets[0].value == dt.datetime(2016, 1, 1)
 
 
@@ -505,7 +504,7 @@ def test_holoviews_widgets_explicit_widget_type_override():
 
     assert isinstance(widgets[0], Select)
     assert widgets[0].name == 'X'
-    assert widgets[0].options == OrderedDict([(str(i), i) for i in range(3)])
+    assert widgets[0].options == {str(i): i for i in range(3)}
     assert widgets[0].value == 0
 
 

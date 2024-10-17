@@ -7,20 +7,20 @@ import asyncio
 import datetime as dt
 import inspect
 import logging
+import os
 import shutil
 import sys
 import threading
 import time
 
-from collections import Counter, OrderedDict, defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 from contextvars import ContextVar
 from functools import partial, wraps
 from typing import (
-    TYPE_CHECKING, Any, Awaitable, Callable, ClassVar, Coroutine, Dict,
-    Iterator as TIterator, List, Literal, Optional, Tuple, Type, TypeVar,
-    Union,
+    TYPE_CHECKING, Any, Awaitable, Callable, ClassVar, Coroutine,
+    Iterator as TIterator, Literal, Optional, TypeVar, Union,
 )
 from urllib.parse import urljoin
 from weakref import WeakKeyDictionary
@@ -40,8 +40,8 @@ _state_logger = logging.getLogger('panel.state')
 if TYPE_CHECKING:
     from concurrent.futures import Future
 
-    from bokeh.document.models import ImportedStyleSheet
     from bokeh.model import Model
+    from bokeh.models import ImportedStyleSheet
     from bokeh.server.contexts import BokehSessionContext
     from bokeh.server.server import Server
     from IPython.display import DisplayHandle
@@ -66,7 +66,9 @@ def set_curdoc(doc: Document):
     try:
         yield
     finally:
-        state._curdoc.reset(token)
+        # If _curdoc has been reset it will raise a ValueError
+        with suppress(ValueError):
+            state._curdoc.reset(token)
 
 def curdoc_locked() -> Document:
     try:
@@ -87,9 +89,6 @@ class _state(param.Parameterized):
     apps to indicate their state to a user.
     """
 
-    base_url = param.String(default='/', readonly=True, doc="""
-       Base URL for all server paths.""")
-
     busy = param.Boolean(default=False, readonly=True, doc="""
        Whether the application is currently busy processing a user
        callback.""")
@@ -102,23 +101,26 @@ class _state(param.Parameterized):
        Object with encrypt and decrypt methods to support encryption
        of secret variables including OAuth information.""")
 
-    rel_path = param.String(default='', readonly=True, doc="""
-       Relative path from the current app being served to the root URL.
-       If application is embedded in a different server via autoload.js
-       this will instead reflect an absolute path.""")
-
     session_info = param.Dict(default={'total': 0, 'live': 0,
-                                       'sessions': OrderedDict()}, doc="""
+                                       'sessions': {}}, doc="""
        Tracks information and statistics about user sessions.""")
 
     webdriver = param.Parameter(default=None, doc="""
       Selenium webdriver used to export bokeh models to pngs.""")
+
+    _base_url = param.String(default='/', readonly=True, doc="""
+       Base URL for all server paths.""")
 
     _busy_counter = param.Integer(default=0, doc="""
        Count of active callbacks current being processed.""")
 
     _memoize_cache = param.Dict(default={}, doc="""
        A dictionary used by the cache decorator.""")
+
+    _rel_path = param.String(default='', readonly=True, doc="""
+       Relative path from the current app being served to the root URL.
+       If application is embedded in a different server via autoload.js
+       this will instead reflect an absolute path.""")
 
     # Holds temporary curdoc overrides per thread
     _curdoc = ContextVar('curdoc', default=None)
@@ -134,7 +136,7 @@ class _state(param.Parameterized):
     _admin_context = None
 
     # Jupyter communication
-    _comm_manager: ClassVar[Type[_CommManager]] = _CommManager
+    _comm_manager: ClassVar[type[_CommManager]] = _CommManager
     _jupyter_kernel_context: ClassVar[BokehSessionContext | None] = None
     _kernels = {}
     _ipykernels: ClassVar[WeakKeyDictionary[Document, Any]] = WeakKeyDictionary()
@@ -147,47 +149,47 @@ class _state(param.Parameterized):
     _location: ClassVar[Location | None] = None # Global location, e.g. for notebook context
     _locations: ClassVar[WeakKeyDictionary[Document, Location]] = WeakKeyDictionary() # Server locations indexed by document
 
-    # Locations
+    # Notifications
     _notification: ClassVar[NotificationArea | None] = None # Global location, e.g. for notebook context
-    _notifications: ClassVar[WeakKeyDictionary[Document, NotificationArea]] = WeakKeyDictionary() # Server locations indexed by document
+    _notifications: ClassVar[WeakKeyDictionary[Document, NotificationArea]] = WeakKeyDictionary() # Server notifications indexed by document
 
     # Templates
     _template: ClassVar[BaseTemplate | None] = None
     _templates: ClassVar[WeakKeyDictionary[Document, BaseTemplate]] = WeakKeyDictionary() # Server templates indexed by document
 
     # An index of all currently active views
-    _views: ClassVar[Dict[str, Tuple[Viewable, Model, Document, Comm | None]]] = {}
+    _views: ClassVar[dict[str, tuple[Viewable, Model, Document, Comm | None]]] = {}
 
     # For templates to keep reference to their main root
-    _fake_roots: ClassVar[List[str]] = []
+    _fake_roots: ClassVar[list[str]] = []
 
     # An index of all currently active servers
-    _servers: ClassVar[Dict[str, Tuple[Server, Viewable | BaseTemplate, List[Document]]]] = {}
-    _threads: ClassVar[Dict[str, StoppableThread]] = {}
-    _server_config: ClassVar[WeakKeyDictionary[Any, Dict[str, Any]]] = WeakKeyDictionary()
+    _servers: ClassVar[dict[str, tuple[Server, Viewable | BaseTemplate, list[Document]]]] = {}
+    _threads: ClassVar[dict[str, StoppableThread]] = {}
+    _server_config: ClassVar[WeakKeyDictionary[Any, dict[str, Any]]] = WeakKeyDictionary()
 
     # Jupyter display handles
-    _handles: ClassVar[Dict[str, [DisplayHandle, List[str]]]] = {}
+    _handles: ClassVar[dict[str, [DisplayHandle, list[str]]]] = {}
 
     # Stacks for hashing
     _stacks = WeakKeyDictionary()
 
     # Dictionary of callbacks to be triggered on app load
-    _onload: ClassVar[Dict[Document, Callable[[], None]]] = WeakKeyDictionary()
-    _on_session_created: ClassVar[List[Callable[[BokehSessionContext], []]]] = []
-    _on_session_created_internal: ClassVar[List[Callable[[BokehSessionContext], []]]] = []
-    _on_session_destroyed: ClassVar[List[Callable[[BokehSessionContext], []]]] = []
+    _onload: ClassVar[dict[Document, Callable[[], None]]] = WeakKeyDictionary()
+    _on_session_created: ClassVar[list[Callable[[BokehSessionContext], None]]] = []
+    _on_session_created_internal: ClassVar[list[Callable[[BokehSessionContext], None]]] = []
+    _on_session_destroyed: ClassVar[list[Callable[[BokehSessionContext], None]]] = []
     _loaded: ClassVar[WeakKeyDictionary[Document, bool]] = WeakKeyDictionary()
 
     # Module that was run during setup
     _setup_module = None
 
     # Scheduled callbacks
-    _scheduled: ClassVar[Dict[str, Tuple[Iterator[int], Callable[[], None]]]] = {}
-    _periodic: ClassVar[WeakKeyDictionary[Document, List[PeriodicCallback]]] = WeakKeyDictionary()
+    _scheduled: ClassVar[dict[str, tuple[Iterator[int], Callable[[], None]]]] = {}
+    _periodic: ClassVar[WeakKeyDictionary[Document, list[PeriodicCallback]]] = WeakKeyDictionary()
 
     # Indicators listening to the busy state
-    _indicators: ClassVar[List[BooleanIndicator]] = []
+    _indicators: ClassVar[list[BooleanIndicator]] = []
 
     # Profilers
     _launching = []
@@ -197,13 +199,13 @@ class _state(param.Parameterized):
     _rest_endpoints = {}
 
     # Style cache
-    _stylesheets: ClassVar[WeakKeyDictionary[Document, Dict[str, ImportedStyleSheet]]] = WeakKeyDictionary()
+    _stylesheets: ClassVar[WeakKeyDictionary[Document, dict[str, ImportedStyleSheet]]] = WeakKeyDictionary()
 
     # Loaded extensions
-    _extensions_: ClassVar[WeakKeyDictionary[Document, List[str]]] = WeakKeyDictionary()
+    _extensions_: ClassVar[WeakKeyDictionary[Document, list[str]]] = WeakKeyDictionary()
 
     # Locks
-    _cache_locks: ClassVar[Dict[str, threading.Lock]] = {'main': threading.Lock()}
+    _cache_locks: ClassVar[dict[str, threading.Lock]] = {'main': threading.Lock()}
 
     # Sessions
     _sessions = {}
@@ -212,11 +214,18 @@ class _state(param.Parameterized):
     # Layout editor
     _cell_outputs = defaultdict(list)
     _cell_layouts = defaultdict(dict)
-    _session_outputs: ClassVar[WeakKeyDictionary[Document, Dict[str, Any]]] = WeakKeyDictionary()
+    _session_outputs: ClassVar[WeakKeyDictionary[Document, dict[str, Any]]] = WeakKeyDictionary()
 
     # Override user info
     _oauth_user_overrides = {}
     _active_users = Counter()
+
+    # Paths
+    _rel_paths: ClassVar[WeakKeyDictionary[Document, str]] = WeakKeyDictionary()
+    _base_urls: ClassVar[WeakKeyDictionary[Document, str]] = WeakKeyDictionary()
+
+    # Watchers
+    _watch_events: list[asyncio.Event] = []
 
     def __repr__(self) -> str:
         server_info = []
@@ -250,7 +259,7 @@ class _state(param.Parameterized):
     @property
     def _is_launching(self) -> bool:
         curdoc = self.curdoc
-        if not curdoc or not curdoc.session_context:
+        if not curdoc or not curdoc.session_context or not curdoc.session_context.server_context:
             return False
         return not bool(curdoc.session_context.server_context.sessions)
 
@@ -279,8 +288,9 @@ class _state(param.Parameterized):
         3. The application has fully loaded and the Websocket is open.
         """
         return (
-            doc is self.curdoc and self._thread_id in (self._current_thread, None) and
-            (not doc or not doc.session_context or self._loaded.get(doc))
+            doc is self.curdoc and
+            self._thread_id in (self._current_thread, None) and
+            (not (doc and doc.session_context and doc.session_context.session) or self._loaded.get(doc))
         )
 
     @param.depends('_busy_counter', watch=True)
@@ -354,7 +364,7 @@ class _state(param.Parameterized):
         return stack
 
     def _get_callback(self, endpoint: str):
-        _updating: Dict[int, bool] = {}
+        _updating: dict[int, bool] = {}
         def link(*events):
             event = events[0]
             obj = event.cls if event.obj is None else event.obj
@@ -474,7 +484,11 @@ class _state(param.Parameterized):
 
         Note: Keyword arguments must be hashable.
 
-        Example:
+        Pandas Example:
+
+        >>> data = pn.state.as_cached('data', pd.read_csv, filepath_or_buffer=DATA_URL)
+
+        Function Example:
 
         >>> def load_dataset(name):
         >>>     # some slow operation that uses name to load a dataset....
@@ -599,7 +613,7 @@ class _state(param.Parameterized):
 
     def execute(
         self,
-        callback: Callable([], None),
+        callback: Callable[[], None],
         schedule: bool | Literal['auto', 'thread'] = 'auto'
     ) -> None:
         """
@@ -733,7 +747,7 @@ class _state(param.Parameterized):
 
     def publish(
         self, endpoint: str, parameterized: param.Parameterized,
-        parameters: Optional[List[str]] = None
+        parameters: Optional[list[str]] = None
     ) -> None:
         """
         Publish parameters on a Parameterized object as a REST API.
@@ -769,6 +783,7 @@ class _state(param.Parameterized):
         any other state held by the server.
         """
         self.kill_all_servers()
+        self._curdoc = ContextVar('curdoc', default=None)
         self._indicators.clear()
         self._location = None
         self._locations.clear()
@@ -784,6 +799,9 @@ class _state(param.Parameterized):
         self._session_key_funcs.clear()
         self._on_session_created.clear()
         self._on_session_destroyed.clear()
+        self._stylesheets.clear()
+        self._scheduled.clear()
+        self._periodic.clear()
 
     def schedule_task(
         self, name: str, callback: Callable[[], None], at: Tat =None,
@@ -840,6 +858,7 @@ class _state(param.Parameterized):
           Whether the callback should be run on a thread (requires
           config.nthreads to be set).
         """
+        name = f"{os.getpid()}_{name}"
         if name in self._scheduled:
             if callback is not self._scheduled[name][1]:
                 self.param.warning(
@@ -868,7 +887,7 @@ class _state(param.Parameterized):
                         yield new.timestamp()
                 elif callable(at):
                     while True:
-                        new = at(dt.datetime.utcnow())
+                        new = at(dt.datetime.now(dt.timezone.utc).replace(tzinfo=None))
                         if new is None:
                             raise StopIteration
                         yield new.replace(tzinfo=dt.timezone.utc).astimezone().timestamp()
@@ -995,18 +1014,46 @@ class _state(param.Parameterized):
         self._curdoc.set(doc)
 
     @property
-    def cookies(self) -> Dict[str, str]:
+    def cookies(self) -> dict[str, str]:
         """
         Returns the cookies associated with the request that started the session.
         """
         return self.curdoc.session_context.request.cookies if self.curdoc and self.curdoc.session_context else {}
 
     @property
-    def headers(self) -> Dict[str, str | List[str]]:
+    def headers(self) -> dict[str, str | list[str]]:
         """
         Returns the header associated with the request that started the session.
         """
         return self.curdoc.session_context.request.headers if self.curdoc and self.curdoc.session_context else {}
+
+    @property
+    def base_url(self) -> str:
+        base_url = self._base_url
+        if self.curdoc:
+            return self._base_urls.get(self.curdoc, base_url)
+        return base_url
+
+    @base_url.setter
+    def base_url(self, value: str):
+        if self.curdoc:
+            self._base_urls[self.curdoc] = value
+        else:
+            self._base_url = value
+
+    @property
+    def rel_path(self) -> str | None:
+        rel_path = self._rel_path
+        if self.curdoc:
+            return self._rel_paths.get(self.curdoc, rel_path)
+        return rel_path
+
+    @rel_path.setter
+    def rel_path(self, value: str | None):
+        if self.curdoc:
+            self._rel_paths[self.curdoc] = value
+        else:
+            self._rel_path = value
 
     @property
     def loaded(self) -> bool:
@@ -1043,20 +1090,25 @@ class _state(param.Parameterized):
 
     @property
     def notifications(self) -> NotificationArea | None:
-        from ..config import config
-        if config.notifications and self.curdoc and self.curdoc.session_context and self.curdoc not in self._notifications:
-            from .notifications import NotificationArea
-            js_events = {}
-            if config.ready_notification:
-                js_events['document_ready'] = {'type': 'success', 'message': config.ready_notification, 'duration': 3000}
-            if config.disconnect_notification:
-                js_events['connection_lost'] = {'type': 'error', 'message': config.disconnect_notification}
-            self._notifications[self.curdoc] = notifications = NotificationArea(js_events=js_events)
-            return notifications
-        elif self.curdoc is None or self.curdoc.session_context is None:
+        if self.curdoc is None:
             return self._notification
-        else:
-            return self._notifications.get(self.curdoc) if self.curdoc else None
+
+        is_session = (self.curdoc.session_context is not None or self._is_pyodide)
+        if self.curdoc in self._notifications:
+            return self._notifications[self.curdoc]
+
+        from panel.config import config
+        if not (config.notifications and is_session):
+            return None if is_session else self._notification
+
+        from panel.io.notifications import NotificationArea
+        js_events = {}
+        if config.ready_notification:
+            js_events['document_ready'] = {'type': 'success', 'message': config.ready_notification, 'duration': 3000}
+        if config.disconnect_notification:
+            js_events['connection_lost'] = {'type': 'error', 'message': config.disconnect_notification}
+        self._notifications[self.curdoc] = notifications = NotificationArea(js_events=js_events)
+        return notifications
 
     @property
     def refresh_token(self) -> str | None:
@@ -1088,7 +1140,7 @@ class _state(param.Parameterized):
             return False
 
     @property
-    def session_args(self) -> Dict[str, List[bytes]]:
+    def session_args(self) -> dict[str, list[bytes]]:
         """
         Returns the request arguments associated with the request that started the session.
         """
@@ -1102,6 +1154,8 @@ class _state(param.Parameterized):
         elif self.curdoc is None and self._template:
             return self._template
         template = config.template(theme=config.theme)
+        if not config.design:
+            config.design = template.design
         if self.curdoc is None:
             self._template = template
         else:
@@ -1126,7 +1180,7 @@ class _state(param.Parameterized):
         return decode_signed_value(config.cookie_secret, 'user', user).decode('utf-8')
 
     @property
-    def user_info(self) -> Dict[str, Any] | None:
+    def user_info(self) -> dict[str, Any] | None:
         """
         Returns the OAuth user information if enabled.
         """

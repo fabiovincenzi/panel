@@ -1,13 +1,16 @@
 import asyncio
 import contextlib
+import http.server
 import os
 import platform
 import re
+import socket
 import subprocess
 import sys
 import time
 import uuid
 
+from functools import partial
 from queue import Empty, Queue
 from threading import Thread
 
@@ -57,6 +60,7 @@ APP_PATTERN = re.compile(r'Bokeh app running at: http://localhost:(\d+)/')
 ON_POSIX = 'posix' in sys.builtin_module_names
 
 linux_only = pytest.mark.skipif(platform.system() != 'Linux', reason="Only supported on Linux")
+unix_only = pytest.mark.skipif(platform.system() == 'Windows', reason="Only supported on unix-like systems")
 
 from panel.pane.alert import Alert
 from panel.pane.markup import Markdown
@@ -119,7 +123,7 @@ def check_layoutable_properties(layoutable, model):
 
 def wait_until(fn, page=None, timeout=5000, interval=100):
     """
-    Exercice a test function in a loop until it evaluates to True
+    Exercise a test function in a loop until it evaluates to True
     or times out.
 
     The function can either be a simple lambda that returns True or False:
@@ -163,7 +167,7 @@ def wait_until(fn, page=None, timeout=5000, interval=100):
             result = fn()
         except AssertionError as e:
             if timed_out():
-                raise TimeoutError(timeout_msg) from e
+                raise TimeoutError(f"{timeout_msg}: {e}") from e
         else:
             if result not in (None, True, False):
                 raise ValueError(
@@ -269,15 +273,36 @@ def get_ctrl_modifier():
         raise ValueError(f'No control modifier defined for platform {sys.platform}')
 
 
+def get_open_ports(n=1):
+    sockets,ports = [], []
+    for _ in range(n):
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.bind(('127.0.0.1', 0))
+        ports.append(s.getsockname()[1])
+        sockets.append(s)
+    for s in sockets:
+        s.close()
+    return tuple(ports)
+
+
 def serve_and_wait(app, page=None, prefix=None, port=None, **kwargs):
     server_id = kwargs.pop('server_id', uuid.uuid4().hex)
-    serve(app, port=port or 0, threaded=True, show=False, liveness=True, server_id=server_id, prefix=prefix or "", **kwargs)
+    if serve_and_wait.server_implementation == 'fastapi':
+        from panel.io.fastapi import serve as serve_app
+        port = port or get_open_ports()[0]
+    else:
+        serve_app = serve
+    serve_app(app, port=port or 0, threaded=True, show=False, liveness=True, server_id=server_id, prefix=prefix or "", **kwargs)
     wait_until(lambda: server_id in state._servers, page)
     server = state._servers[server_id][0]
-    port = server.port
+    if serve_and_wait.server_implementation == 'fastapi':
+        port = port
+    else:
+        port = server.port
     wait_for_server(port, prefix=prefix)
     return port
 
+serve_and_wait.server_implementation = 'tornado'
 
 def serve_component(page, app, suffix='', wait=True, **kwargs):
     msgs = []
@@ -293,8 +318,9 @@ def serve_component(page, app, suffix='', wait=True, **kwargs):
 
 def serve_and_request(app, suffix="", n=1, port=None, **kwargs):
     port = serve_and_wait(app, port=port, **kwargs)
-    reqs = [requests.get(f"http://localhost:{port}{suffix}") for i in range(n)]
-    return reqs[0] if len(reqs) == 1 else reqs
+    reqs = [r for _ in range(n) if (r := requests.get(f"http://localhost:{port}{suffix}")).ok]
+    assert len(reqs) == n, "Not all requests were successful"
+    return reqs[0] if n == 1 else reqs
 
 
 def wait_for_server(port, prefix=None, timeout=3):
@@ -314,11 +340,11 @@ def wait_for_server(port, prefix=None, timeout=3):
 
 @contextlib.contextmanager
 def run_panel_serve(args, cwd=None):
-    cmd = [sys.executable, "-m", "panel", "serve"] + args
+    cmd = [sys.executable, "-m", "panel", "serve", *map(str, args)]
     p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=False, cwd=cwd, close_fds=ON_POSIX)
     try:
         yield p
-    except Exception as e:
+    except BaseException as e:
         p.terminate()
         p.wait()
         print("An error occurred: %s", e)  # noqa: T201
@@ -368,29 +394,93 @@ class NBSR:
         except Empty:
             return None
 
-def wait_for_port(stdout):
+def wait_for_regex(stdout, regex, count=1, return_output=False):
     nbsr = NBSR(stdout)
     m = None
-    output = []
+    output, found = [], []
     for _ in range(20):
         o = nbsr.readline(0.5)
         if not o:
             continue
         out = o.decode('utf-8')
         output.append(out)
-        m = APP_PATTERN.search(out)
+        m = regex.search(out)
         if m is not None:
+            found.append(m.group(1))
+        if len(found) == count:
             break
-    if m is None:
+    if len(found) < count:
         output = '\n    '.join(output)
         pytest.fail(
             "No matching log line in process output, following output "
             f"was captured:\n\n   {output}"
         )
-    return int(m.group(1))
+    return (found, output) if return_output else found
+
+def wait_for_port(stdout):
+    return int(wait_for_regex(stdout, APP_PATTERN)[0])
 
 def write_file(content, file_obj):
     file_obj.write(content)
     file_obj.flush()
     os.fsync(file_obj)
     file_obj.seek(0)
+
+
+def http_serve_directory(directory=".", port=0):
+    """Spawns an http.server.HTTPServer in a separate thread on the given port.
+    The server serves files from the given *directory*. The port listening on
+    will automatically be picked by the operating system to avoid race
+    conditions when trying to bind to an open port that turns out not to be
+    free after all. The hostname is always "localhost".
+
+    Arguments
+    ----------
+    directory : str, optional
+        The directory to server files from. Defaults to the current directory.
+    port : int, optional
+        Port to serve on, defaults to zero which assigns a random port.
+
+    Returns
+    -------
+    http.server.HTTPServer
+        The HTTP server which is serving files from a separate thread.
+        It is not super necessary but you might want to call shutdown() on the
+        returned HTTP server object. This will stop the infinite request loop
+        running in the thread which in turn will then exit. The reason why this
+        is only optional is that the thread in which the server runs is a daemon
+        thread which will be terminated when the main thread ends.
+        By calling shutdown() you'll get a cleaner shutdown because the socket
+        is properly closed.
+    str
+        The address of the server as a string, e.g. "http://localhost:1234".
+    """
+    hostname = "localhost"
+    directory = os.path.abspath(directory)
+    handler = partial(_SimpleRequestHandler, directory=directory)
+    httpd = http.server.HTTPServer((hostname, port), handler, False)
+    # Block only for 0.5 seconds max
+    httpd.timeout = 0.5
+    httpd.server_bind()
+
+    address = "http://%s:%d" % (httpd.server_name, httpd.server_port)
+
+    httpd.server_activate()
+
+    def serve_forever(httpd):
+        with httpd:
+            httpd.serve_forever()
+
+    thread = Thread(target=serve_forever, args=(httpd, ), daemon=True)
+    thread.start()
+
+    return httpd, address
+
+class _SimpleRequestHandler(http.server.SimpleHTTPRequestHandler):
+    """Same as SimpleHTTPRequestHandler with adjusted logging."""
+
+    def end_headers(self):
+        self.send_header('Access-Control-Allow-Origin', '*')
+        self.send_header('Cross-Origin-Opener-Policy', 'same-origin')
+        self.send_header('Cross-Origin-Embedder-Policy', 'credentialless')
+        http.server.SimpleHTTPRequestHandler.end_headers(self)

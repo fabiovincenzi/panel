@@ -2,6 +2,10 @@
   --track-width: 2;
 }
 
+#header-design-provider fast-switch::part(checked-indicator) {
+  --neutral-foreground-rest: #181818;
+}
+
 html {
   scrollbar-face-color: var(--neutral-fill-rest);
   scrollbar-base-color: var(--neutral-fill-rest);
@@ -370,4 +374,10 @@ fast-card {
 .pn-modal-content {
   display: block;
   overflow-x: auto;
+}
+
+textarea.xterm-helper-textarea,
+span.xterm-char-measure-element {
+  pointer-events: none;
+  opacity: 0;
 }

@@ -42,6 +42,7 @@ class TestChatInterface:
         chat_interface.avatar = Image("https://panel.holoviz.org/_static/logo_horizontal.png")
         assert chat_interface.avatar.object == "https://panel.holoviz.org/_static/logo_horizontal.png"
 
+    @pytest.mark.internet
     @pytest.mark.parametrize("type_", [bytes, BytesIO])
     def test_init_avatar_bytes(self, type_, chat_interface):
         with requests.get("https://panel.holoviz.org/_static/logo_horizontal.png") as resp:
@@ -382,6 +383,18 @@ class TestChatInterface:
         assert chat_interface.objects[1].object == "2"
         assert chat_interface.objects[2].object == "3"
 
+    def test_custom_js_no_code(self):
+        chat_interface = ChatInterface()
+        with pytest.raises(ValueError, match="A 'code' key is required for"):
+            chat_interface.button_properties={
+                "help": {
+                    "icon": "help",
+                    "js_on_click": {
+                        "args": {"chat_input": chat_interface.active_widget},
+                    },
+                },
+            }
+
     def test_manual_user(self):
         chat_interface = ChatInterface(user="New User")
         assert chat_interface.user == "New User"
@@ -445,6 +458,12 @@ class TestChatInterface:
         await async_wait_until(lambda: chat_interface.objects[-1].object == "Yup, I heard!")
         await asyncio.sleep(0.2)  # give a little time for enabling
         assert not chat_interface.disabled
+
+    def test_prevent_stream_override_message_user_avatar(self, chat_interface):
+        msg = chat_interface.send("Hello", user="Welcoming User", avatar="👋")
+        chat_interface.stream("New Hello", message=msg)
+        assert msg.user == "Welcoming User"
+        assert msg.avatar == "👋"
 
 class TestChatInterfaceWidgetsSizingMode:
     def test_none(self):

@@ -3,7 +3,7 @@ Spacer components to add horizontal or vertical space to a layout.
 """
 from __future__ import annotations
 
-from typing import ClassVar, List
+from typing import ClassVar
 
 import param
 
@@ -49,7 +49,7 @@ class VSpacer(Spacer):
     Using this component we can space objects equidistantly in a layout and
     allow the empty space to shrink when the browser is resized.
 
-    Reference: https://panel.holoviz.org/user_guide/Customization.html#spacers
+    Reference: https://panel.holoviz.org/how_to/layout/spacing.html#spacer-components
 
     :Example:
 
@@ -105,7 +105,7 @@ class Divider(Reactive):
 
     _bokeh_model = BkDiv
 
-    _stylesheets: ClassVar[List[str]] = [
+    _stylesheets: ClassVar[list[str]] = [
         f'{CDN_DIST}css/divider.css'
     ]
 

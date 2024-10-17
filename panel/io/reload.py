@@ -113,9 +113,12 @@ def watched_modules():
 async def async_file_watcher(stop_event=None):
     while True:
         module_paths, files = watched_modules()
-        async for changes in awatch(*files, stop_event=stop_event):
-            _reload(module_paths, changes)
-            await asyncio.sleep(1)
+        try:
+            async for changes in awatch(*files, stop_event=stop_event):
+                _reload(module_paths, changes)
+                await asyncio.sleep(1)
+                break
+        except asyncio.CancelledError:
             break
         if stop_event.is_set():
             break
@@ -129,7 +132,7 @@ async def setup_autoreload_watcher(stop_event=None):
         import watchfiles  # noqa
     except Exception:
         warnings.warn(
-            '--autoreload functionality now depends on the watchfiles '
+            '--dev and --autoreload functionality now depends on the watchfiles '
             'library. In future versions autoreload will not work without '
             'watchfiles being installed. Since it provides a much better '
             'user experience consider installing it today.', FutureWarning,

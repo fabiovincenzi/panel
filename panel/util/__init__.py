@@ -4,6 +4,7 @@ Various general utilities used in the panel codebase.
 from __future__ import annotations
 
 import ast
+import asyncio
 import base64
 import datetime as dt
 import json
@@ -43,8 +44,8 @@ from .parameters import (  # noqa
 log = logging.getLogger('panel.util')
 
 bokeh_version = Version(Version(bokeh.__version__).base_version)
+BOKEH_GE_3_6 = bokeh_version >= Version('3.6')
 
-BOKEH_JS_NAT = np.nan
 PARAM_NAME_PATTERN = re.compile(r'^.*\d{5}$')
 
 class LazyHTMLSanitizer:
@@ -88,7 +89,7 @@ def indexOf(obj, objs):
                 return i
         except Exception:
             pass
-    raise ValueError('%s not in list' % obj)
+    raise ValueError(f'{obj} not in list')
 
 
 def param_name(name: str) -> str:
@@ -180,13 +181,13 @@ def value_as_datetime(value):
     Retrieve the value tuple as a tuple of datetime objects.
     """
     if isinstance(value, numbers.Number):
-        value = datetime.utcfromtimestamp(value / 1000)
+        value = datetime.fromtimestamp(value / 1000, tz=dt.timezone.utc).replace(tzinfo=None)
     return value
 
 
 def value_as_date(value):
     if isinstance(value, numbers.Number):
-        value = datetime.utcfromtimestamp(value / 1000).date()
+        value = datetime.fromtimestamp(value / 1000, tz=dt.timezone.utc).replace(tzinfo=None).date()
     elif isinstance(value, datetime):
         value = value.date()
     return value
@@ -485,3 +486,47 @@ def try_datetime64_to_datetime(value):
     if isinstance(value, np.datetime64):
         value = value.astype('datetime64[ms]').astype(datetime)
     return value
+
+
+async def to_async_gen(sync_gen):
+    done = object()
+
+    def safe_next():
+        # Converts StopIteration to a sentinel value to avoid:
+        # TypeError: StopIteration interacts badly with generators and cannot be raised into a Future
+        try:
+            return next(sync_gen)
+        except StopIteration:
+            return done
+
+    while True:
+        value = await asyncio.to_thread(safe_next)
+        if value is done:
+            break
+        yield value
+
+
+def prefix_length(a: str, b: str) -> int:
+    """
+    Searches for the length of overlap in the starting
+    characters of string b in a. Uses binary search
+    if b is not already a prefix of a.
+    """
+    if a.startswith(b):
+        return len(b)
+    left, right = 0, min(len(a), len(b))
+    while left < right:
+        mid = (left + right + 1) // 2
+        if a.startswith(b[:mid]):
+            left = mid
+        else:
+            right = mid - 1
+    return left
+
+
+def camel_to_kebab(name):
+    # Use regular expressions to insert a hyphen before each uppercase letter not at the start,
+    # and between a lowercase and uppercase letter.
+    kebab_case = re.sub(r'([a-z0-9])([A-Z])', r'\1-\2', name)
+    kebab_case = re.sub(r'([A-Z]+)([A-Z][a-z0-9])', r'\1-\2', kebab_case)
+    return kebab_case.lower()

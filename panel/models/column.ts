@@ -1,9 +1,18 @@
-import {Column as BkColumn, ColumnView as BkColumnView} from "@bokehjs/models/layouts/column"
-import * as DOM from "@bokehjs/core/dom"
+import {ModelEvent} from "@bokehjs/core/bokeh_events"
+import {div} from "@bokehjs/core/dom"
 import type * as p from "@bokehjs/core/properties"
+import type {EventCallback} from "@bokehjs/model"
+import {Column as BkColumn, ColumnView as BkColumnView} from "@bokehjs/models/layouts/column"
+
+export class ScrollButtonClick extends ModelEvent {
+  static {
+    this.prototype.event_name = "scroll_button_click"
+  }
+}
 
 export class ColumnView extends BkColumnView {
   declare model: Column
+  _updating: boolean = false
 
   scroll_down_button_el: HTMLElement
 
@@ -22,6 +31,9 @@ export class ColumnView extends BkColumnView {
   }
 
   scroll_to_position(): void {
+    if (this._updating) {
+      return
+    }
     requestAnimationFrame(() => {
       this.el.scrollTo({top: this.model.scroll_position, behavior: "instant"})
     })
@@ -36,8 +48,11 @@ export class ColumnView extends BkColumnView {
 
   trigger_auto_scroll(): void {
     const limit = this.model.auto_scroll_limit
+    if (limit == 0) {
+      return
+    }
     const within_limit = this.distance_from_latest <= limit
-    if (limit == 0 || !within_limit) {
+    if (!within_limit) {
       return
     }
 
@@ -45,22 +60,23 @@ export class ColumnView extends BkColumnView {
   }
 
   record_scroll_position(): void {
+    this._updating = true
     this.model.scroll_position = Math.round(this.el.scrollTop)
+    this._updating = false
   }
 
   toggle_scroll_button(): void {
     const threshold = this.model.scroll_button_threshold
-    const exceeds_threshold = this.distance_from_latest >= threshold
-    if (this.scroll_down_button_el) {
-      this.scroll_down_button_el.classList.toggle(
-        "visible", threshold !== 0 && exceeds_threshold,
-      )
+    if (!this.scroll_down_button_el || threshold === 0) {
+      return
     }
+    const exceeds_threshold = this.distance_from_latest >= threshold
+    this.scroll_down_button_el.classList.toggle("visible", exceeds_threshold)
   }
 
   override render(): void {
     super.render()
-    this.scroll_down_button_el = DOM.createElement("div", {class: "scroll-button"})
+    this.scroll_down_button_el = div({class: "scroll-button"})
     this.shadow_el.appendChild(this.scroll_down_button_el)
     this.el.addEventListener("scroll", () => {
       this.record_scroll_position()
@@ -68,6 +84,7 @@ export class ColumnView extends BkColumnView {
     })
     this.scroll_down_button_el.addEventListener("click", () => {
       this.scroll_to_latest()
+      this.model.trigger_event(new ScrollButtonClick())
     })
   }
 
@@ -115,5 +132,9 @@ export class Column extends BkColumn {
       scroll_button_threshold: [Int, 0],
       view_latest: [Bool, false],
     }))
+  }
+
+  on_click(callback: EventCallback<ScrollButtonClick>): void {
+    this.on_event(ScrollButtonClick, callback)
   }
 }

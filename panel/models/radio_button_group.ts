@@ -21,6 +21,22 @@ export class RadioButtonGroupView extends bkRadioButtonGroupView {
     }
   }
 
+  override connect_signals(): void {
+    super.connect_signals()
+    const {tooltip} = this.model.properties
+    this.on_change(tooltip, () => this.update_tooltip())
+  }
+
+  async update_tooltip(): Promise<void> {
+    if (this.tooltip != null) {
+      this.tooltip.remove()
+    }
+    const {tooltip} = this.model
+    if (tooltip != null) {
+      this.tooltip = await build_view(tooltip, {parent: this})
+    }
+  }
+
   override async lazy_initialize(): Promise<void> {
     await super.lazy_initialize()
     const {tooltip} = this.model
@@ -42,7 +58,7 @@ export class RadioButtonGroupView extends bkRadioButtonGroupView {
         visible,
       })
     }
-    let timer: number
+    let timer: ReturnType<typeof setTimeout> | undefined
     this.el.addEventListener("mouseenter", () => {
       timer = setTimeout(() => toggle(true), this.model.tooltip_delay)
     })

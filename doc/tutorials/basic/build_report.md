@@ -6,8 +6,8 @@ In this section, we will collaboratively create a *Wind Turbine Report*. Togethe
 - Export the report to a static `.html` file using the `.save` method.
 - Distribute the report via email.
 
-<video controls="" poster="https://assets.holoviz.org/panel/tutorials/wind_turbine_report.png">
-    <source src="https://assets.holoviz.org/panel/tutorials/wind_turbine_report.mp4" type="video/mp4" style="max-height: 400px; max-width: 100%;">
+<video muted controls loop poster="https://assets.holoviz.org/panel/tutorials/wind_turbine_report.png" style="max-height: 400px; max-width: 100%;">
+    <source src="https://assets.holoviz.org/panel/tutorials/wind_turbine_report.mp4" type="video/mp4">
     Your browser does not support the video tag.
 </video>
 
@@ -104,7 +104,7 @@ header = pn.Row(
 indicators = pn.FlexBox(
     pn.indicators.Number(
         value=total_capacity / 1e6,
-        name="Total Capacity (TW)",
+        name="Total Capacity (GW)",
         format="{value:,.0f}",
         styles=CARD_STYLE,
     ),
@@ -301,7 +301,7 @@ Here, we define some styling constants and create a header for the report, which
 indicators = pn.FlexBox(
     pn.indicators.Number(
         value=total_capacity / 1e6,
-        name="Total Capacity (TW)",
+        name="Total Capacity (GW)",
         format="{value:,.0f}",
         styles=CARD_STYLE,
     ),
@@ -386,8 +386,8 @@ Please verify that the file `report.html` has been created.
 
 Please open the `report.html` file in your browser. It should look like:
 
-<video controls="" poster="https://assets.holoviz.org/panel/tutorials/wind_turbine_report.png">
-    <source src="https://assets.holoviz.org/panel/tutorials/wind_turbine_report.mp4" type="video/mp4" style="max-height: 400px; max-width: 100%;">
+<video muted controls loop poster="https://assets.holoviz.org/panel/tutorials/wind_turbine_report.png" style="max-height: 400px; max-width: 100%;">
+    <source src="https://assets.holoviz.org/panel/tutorials/wind_turbine_report.mp4" type="video/mp4">
     Your browser does not support the video tag.
 </video>
 

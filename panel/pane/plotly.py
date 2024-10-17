@@ -14,7 +14,8 @@ import param
 from bokeh.models import ColumnDataSource
 from pyviz_comms import JupyterComm
 
-from ..util import isdatetime, lazy_load
+from ..util import lazy_load
+from ..util.checks import datetime_types, isdatetime
 from ..viewable import Layoutable
 from .base import ModelPane
 
@@ -44,25 +45,27 @@ class Plotly(ModelPane):
     >>> Plotly(some_plotly_figure, width=500, height=500)
     """
 
-    click_data = param.Dict(doc="Click callback data")
+    click_data = param.Dict(doc="Click event data from `plotly_click` event.")
 
-    clickannotation_data = param.Dict(doc="Clickannotation callback data")
+    clickannotation_data = param.Dict(doc="Clickannotation event data from `plotly_clickannotation` event.")
 
-    config = param.Dict(nested_refs=True, doc="Config data")
+    config = param.Dict(nested_refs=True, doc="""
+        Plotly configuration options. See https://plotly.com/javascript/configuration-options/""")
 
-    hover_data = param.Dict(doc="Hover callback data")
+    hover_data = param.Dict(doc="Hover event data from `plotly_hover` and `plotly_unhover` events.")
 
     link_figure = param.Boolean(default=True, doc="""
        Attach callbacks to the Plotly figure to update output when it
        is modified in place.""")
 
-    relayout_data = param.Dict(nested_refs=True, doc="Relayout callback data")
+    relayout_data = param.Dict(nested_refs=True, doc="Relayout event data from `plotly_relayout` event")
 
-    restyle_data = param.List(nested_refs=True, doc="Restyle callback data")
+    restyle_data = param.List(nested_refs=True, doc="Restyle event data from `plotly_restyle` event")
 
-    selected_data = param.Dict(nested_refs=True, doc="Selected callback data")
+    selected_data = param.Dict(nested_refs=True, doc="Selected event data from `plotly_selected` and `plotly_deselect` events.")
 
-    viewport = param.Dict(nested_refs=True, doc="Current viewport state")
+    viewport = param.Dict(nested_refs=True, doc="""Current viewport state, i.e. the x- and y-axis limits of the displayed plot.
+                          Updated on `plotly_relayout`, `plotly_relayouting` and `plotly_restyle` events.""")
 
     viewport_update_policy = param.Selector(default="mouseup", doc="""
         Policy by which the viewport parameter is updated during user interactions.
@@ -86,7 +89,8 @@ class Plotly(ModelPane):
     _updates: ClassVar[bool] = True
 
     _rename: ClassVar[Mapping[str, str | None]] = {
-        'link_figure': None, 'object': None
+        'link_figure': None, 'object': None, 'click_data': None, 'clickannotation_data': None,
+        'hover_data': None, 'selected_data': None
     }
 
     @classmethod
@@ -127,10 +131,10 @@ class Plotly(ModelPane):
     @staticmethod
     def _get_sources_for_trace(json, data, parent_path=''):
         for key, value in list(json.items()):
-            full_path = key if not parent_path else "{}.{}".format(parent_path, key)
+            full_path = key if not parent_path else f"{parent_path}.{key}"
             if isinstance(value, np.ndarray):
-                # Extract numpy array
-                data[full_path] = [json.pop(key)]
+                array = json.pop(key)
+                data[full_path] = [array]
             elif isinstance(value, dict):
                 # Recurse into dictionaries:
                 Plotly._get_sources_for_trace(value, data=data, parent_path=full_path)
@@ -203,7 +207,7 @@ class Plotly(ModelPane):
             msg['relayout'] = relayout_data
         if restyle_data:
             msg['restyle'] = {'data': restyle_data, 'traces': trace_indexes}
-        for ref, (m, _) in self._models.items():
+        for ref, (m, _) in self._models.copy().items():
             self._apply_update([], msg, m, ref)
 
     def _update_from_figure(self, event, *args, **kwargs):
@@ -224,7 +228,7 @@ class Plotly(ModelPane):
             try:
                 old = cds.data.get(key)[0]
                 update_array = (
-                    (type(old) != type(new)) or
+                    (type(old) is not type(new)) or
                     (new.shape != old.shape) or
                     (new != old).any())
             except Exception:
@@ -248,17 +252,21 @@ class Plotly(ModelPane):
         For #382: Map datetime elements to strings.
         """
         json = fig.to_plotly_json()
+        layout = json['layout']
         data = json['data']
-
-        for idx in range(len(data)):
-            for key in data[idx]:
-                if isdatetime(data[idx][key]):
-                    arr = data[idx][key]
-                    if isinstance(arr, np.ndarray):
-                        arr = arr.astype(str)
-                    else:
-                        arr = [str(v) for v in arr]
-                    data[idx][key] = arr
+        shapes = layout.get('shapes', [])
+        for trace in data+shapes:
+            for key in trace:
+                if not isdatetime(trace[key]):
+                    continue
+                arr = trace[key]
+                if isinstance(arr, np.ndarray):
+                    arr = arr.astype(str)
+                elif isinstance(arr, datetime_types):
+                    arr = str(arr)
+                else:
+                    arr = [str(v) for v in arr]
+                trace[key] = arr
         return json
 
     def _init_params(self):
@@ -310,7 +318,17 @@ class Plotly(ModelPane):
             self._bokeh_model = lazy_load(
                 'panel.models.plotly', 'PlotlyPlot', isinstance(comm, JupyterComm), root
             )
-        return super()._get_model(doc, root, parent, comm)
+        model = super()._get_model(doc, root, parent, comm)
+        self._register_events('plotly_event', model=model, doc=doc, comm=comm)
+        return model
+
+    def _process_event(self, event):
+        etype = event.data['type']
+        pname = f'{etype}_data'
+        if getattr(self, pname) == event.data['data']:
+            self.param.trigger(pname)
+        else:
+            self.param.update(**{pname: event.data['data']})
 
     def _update(self, ref: str, model: Model) -> None:
         if self.object is None:

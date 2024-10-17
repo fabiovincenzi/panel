@@ -1,5 +1,3 @@
-from collections import OrderedDict
-
 import numpy as np
 import pytest
 
@@ -7,19 +5,20 @@ from panel.layout import GridBox, Row
 from panel.pane import panel
 from panel.tests.util import mpl_available
 from panel.widgets import (
-    ColorMap, CrossSelector, DiscreteSlider, MultiChoice, MultiSelect,
-    NestedSelect, Select, ToggleGroup,
+    AutocompleteInput, ColorMap, CrossSelector, DiscreteSlider, MultiChoice,
+    MultiSelect, NestedSelect, Select, ToggleGroup,
 )
 
 
-def test_select_list_constructor():
-    select = Select(options=['A', 1], value=1)
+@pytest.mark.parametrize('widget', [AutocompleteInput, Select])
+def test_list_constructor(widget):
+    select = widget(options=['A', 1], value=1)
     assert select.options == ['A', 1]
 
-
-def test_select_float_option_with_equality():
+@pytest.mark.parametrize('widget', [AutocompleteInput, Select])
+def test_select_float_option_with_equality(widget):
     opts = {'A': 3.14, '1': 2.0}
-    select = Select(options=opts, value=3.14, name='Select')
+    select = widget(options=opts, value=3.14, name='Select')
     assert select.value == 3.14
 
     select.value = 2
@@ -28,10 +27,10 @@ def test_select_float_option_with_equality():
     select.value = 3.14
     assert select.value == 3.14
 
-
-def test_select_text_option_with_equality():
+@pytest.mark.parametrize('widget', [AutocompleteInput, Select])
+def test_select_text_option_with_equality(widget):
     opts = {'A': 'ABC', '1': 'DEF'}
-    select = Select(options=opts, value='DEF', name='Select')
+    select = widget(options=opts, value='DEF', name='Select')
     assert select.value == 'DEF'
 
     select.value = 'ABC'
@@ -39,7 +38,6 @@ def test_select_text_option_with_equality():
 
     select.value = 'DEF'
     assert select.value == 'DEF'
-
 
 def test_select(document, comm):
     opts = {'A': 'a', '1': 1}
@@ -62,13 +60,54 @@ def test_select(document, comm):
     select.value = opts['A']
     assert widget.value == str(opts['A'])
 
+def test_autocomplete(document, comm):
+    opts = {'A': 'a', '1': 1}
+    select = AutocompleteInput(options=opts, value=opts['1'], name='Autocomplete')
 
-def test_select_parameterized_option_labels():
+    widget = select.get_root(document, comm=comm)
+
+    assert isinstance(widget, select._widget_type)
+    assert widget.title == 'Autocomplete'
+    assert widget.value == str(opts['1'])
+    assert widget.completions == list(opts)
+
+    select._process_events({'value': 'A'})
+    assert select.value == 'a'
+
+    widget.value = '1'
+    select.value = opts['1']
+    assert select.value == opts['1']
+
+    select.value = opts['A']
+    assert widget.value == 'A'
+
+def test_autocomplete_unrestricted(document, comm):
+    opts = {'A': 'a', '1': 1}
+    select = AutocompleteInput(options=opts, value=opts['1'], name='Autocomplete', restrict=False)
+
+    widget = select.get_root(document, comm=comm)
+
+    assert isinstance(widget, select._widget_type)
+    assert widget.title == 'Autocomplete'
+    assert widget.value == str(opts['1'])
+    assert widget.completions == list(opts)
+
+    select._process_events({'value': str(opts['A'])})
+    assert select.value == opts['A']
+
+    select._process_events({'value': 'foo'})
+    assert select.value == 'foo'
+
+    select.value = 'bar'
+    assert widget.value == 'bar'
+
+@pytest.mark.parametrize('widget', [AutocompleteInput, Select])
+def test_select_parameterized_option_labels(widget):
     c1 = panel("Value1", name="V1")
     c2 = panel("Value2")
     c3 = panel("Value3", name="V3")
 
-    select = Select(options=[c1, c2, c3], value=c1)
+    select = widget(options=[c1, c2, c3], value=c1)
     assert select.labels == ['V1', 'Markdown(str)', 'V3']
 
 
@@ -128,7 +167,7 @@ def test_select_change_groups(document, comm):
 
     select.groups = {}
     assert select.value is None
-    assert widget.value == ''
+    assert widget.value is None
 
 
 def test_select_groups_error_with_options():
@@ -149,40 +188,39 @@ def test_select_groups_error_with_options():
     with pytest.raises(ValueError):
         select.options = opts
 
-
-def test_select_change_options(document, comm):
+@pytest.mark.parametrize('widget', [AutocompleteInput, Select])
+def test_select_change_options(widget, document, comm):
     opts = {'A': 'a', '1': 1}
-    select = Select(options=opts, value=opts['1'], name='Select')
+    select = widget(options=opts, value=opts['1'], name='Select')
 
     widget = select.get_root(document, comm=comm)
 
     select.options = {'A': 'a'}
-    assert select.value == opts['A']
-    assert widget.value == str(opts['A'])
+    assert select.value == ('' if select._allows_none else opts['A'])
+    assert widget.value == (str(opts['A']) if select._allows_values else '')
 
     select.options = {}
-    assert select.value is None
-    assert widget.value == ''
+    assert select.value is select.param['value'].default
+    assert widget.value == select.param['value'].default
 
-
-def test_select_non_hashable_options(document, comm):
+@pytest.mark.parametrize('widget', [AutocompleteInput, Select])
+def test_select_non_hashable_options(widget, document, comm):
     opts = {'A': np.array([1, 2, 3]), '1': np.array([3, 4, 5])}
-    select = Select(options=opts, value=opts['1'], name='Select')
+    select = widget(options=opts, value=opts['1'], name='Select')
 
     widget = select.get_root(document, comm=comm)
 
     select.value = opts['A']
     assert select.value is opts['A']
-    assert widget.value == str(opts['A'])
+    assert widget.value == (str(opts['A']) if select._allows_values else 'A')
 
     opts.pop('A')
     select.options = opts
-    assert select.value is opts['1']
-    assert widget.value == str(opts['1'])
-
+    assert select.value is ('' if select._allows_none else opts['1'])
+    assert widget.value == (str(opts['1']) if select._allows_values else '')
 
 def test_select_mutables(document, comm):
-    opts = OrderedDict([('A', [1,2,3]), ('B', [2,4,6]), ('C', dict(a=1,b=2))])
+    opts = {'A': [1,2,3], 'B': [2,4,6], 'C': dict(a=1,b=2)}
     select = Select(options=opts, value=opts['B'], name='Select')
 
     widget = select.get_root(document, comm=comm)
@@ -203,14 +241,13 @@ def test_select_mutables(document, comm):
     select.value = opts['A']
     assert widget.value == str(opts['A'])
 
-
 def test_select_change_options_on_watch(document, comm):
-    select = Select(options=OrderedDict([('A', 'A'), ('1', 1), ('C', object)]),
-                         value='A', name='Select')
+    select = Select(options={'A': 'A', '1': 1, 'C': object},
+                    value='A', name='Select')
 
     def set_options(event):
         if event.new == 1:
-            select.options = OrderedDict([('D', 2), ('E', 'a')])
+            select.options = {'D': 2, 'E': 'a'}
     select.param.watch(set_options, 'value')
 
     model = select.get_root(document, comm=comm)
@@ -263,6 +300,15 @@ def test_nested_select_init_empty(document, comm):
     assert select.options is None
     assert select.levels == []
 
+def test_nested_select_max_depth_empty_first_sublevel(document, comm):
+    select = NestedSelect(options={'foo': ['a', 'b'], 'bar': []})
+
+    assert select._max_depth == 2
+
+def test_nested_select_max_depth_empty_second_sublevel(document, comm):
+    select = NestedSelect(options={'foo': {'0': ['a', 'b'], '1': []}, 'bar': {'0': []}})
+
+    assert select._max_depth == 3
 
 def test_nested_select_init_levels(document, comm):
     options = {
@@ -463,7 +509,7 @@ def test_nested_select_partial_options_set(document, comm):
     select.options = {"Ben": []}
     assert select._widgets[0].value == 'Ben'
     assert select._widgets[0].visible
-    assert select.value == {0: 'Ben'}
+    assert select.value == {0: 'Ben', 1: None}
 
 
 def test_nested_select_partial_value_init(document, comm):
@@ -811,7 +857,7 @@ def test_select_disabled_options_set_value_and_disabled_options(options, size, d
 
 
 def test_multi_select(document, comm):
-    select = MultiSelect(options=OrderedDict([('A', 'A'), ('1', 1), ('C', object)]),
+    select = MultiSelect(options={'A': 'A', '1': 1, 'C': object},
                          value=[object, 1], name='Select')
 
     widget = select.get_root(document, comm=comm)
@@ -834,7 +880,7 @@ def test_multi_select(document, comm):
 
 
 def test_multi_choice(document, comm):
-    choice = MultiChoice(options=OrderedDict([('A', 'A'), ('1', 1), ('C', object)]),
+    choice = MultiChoice(options={'A': 'A', '1': 1, 'C': object},
                          value=[object, 1], name='MultiChoice')
 
     widget = choice.get_root(document, comm=comm)
@@ -857,12 +903,12 @@ def test_multi_choice(document, comm):
 
 
 def test_multi_select_change_options(document, comm):
-    select = MultiSelect(options=OrderedDict([('A', 'A'), ('1', 1), ('C', object)]),
+    select = MultiSelect(options={'A': 'A', '1': 1, 'C': object},
                          value=[object, 1], name='Select')
 
     def set_options(event):
         if event.new == [1]:
-            select.options = OrderedDict([('D', 2), ('E', 'a')])
+            select.options = {'D': 2, 'E': 'a'}
     select.param.watch(set_options, 'value')
 
     model = select.get_root(document, comm=comm)
@@ -874,22 +920,22 @@ def test_multi_select_change_options(document, comm):
 
 def test_toggle_group_error_init(document, comm):
     with pytest.raises(ValueError):
-        ToggleGroup(options=OrderedDict([('A', 'A'), ('1', 1), ('C', object)]),
+        ToggleGroup(options={'A': 'A', '1': 1, 'C': object},
                     value=1, name='RadioButtonGroup',
                     widget_type='button', behavior='check')
 
     with pytest.raises(ValueError):
-        ToggleGroup(options=OrderedDict([('A', 'A'), ('1', 1), ('C', object)]),
+        ToggleGroup(options={'A': 'A', '1': 1, 'C': object},
                     value=[1, object], name='RadioButtonGroup',
                     widget_type='button', behavior='radio')
 
     with pytest.raises(ValueError):
-        ToggleGroup(options=OrderedDict([('A', 'A'), ('1', 1), ('C', object)]),
+        ToggleGroup(options={'A': 'A', '1': 1, 'C': object},
                     value=[1, object], name='RadioButtonGroup',
                     widget_type='buttons')
 
     with pytest.raises(ValueError):
-        ToggleGroup(options=OrderedDict([('A', 'A'), ('1', 1), ('C', object)]),
+        ToggleGroup(options={'A': 'A', '1': 1, 'C': object},
                     value=[1, object], name='RadioButtonGroup',
                     behavior='checks')
 
@@ -897,9 +943,9 @@ def test_toggle_group_error_init(document, comm):
 def test_toggle_group_check(document, comm):
 
     for widget_type in ToggleGroup._widgets_type:
-        select = ToggleGroup(options=OrderedDict([('A', 'A'), ('1', 1), ('C', object)]),
-                               value=[1, object], name='CheckButtonGroup',
-                               widget_type=widget_type, behavior='check')
+        select = ToggleGroup(options={'A': 'A', '1': 1, 'C': object},
+                             value=[1, object], name='CheckButtonGroup',
+                             widget_type=widget_type, behavior='check')
 
         widget = select.get_root(document, comm=comm)
 
@@ -931,9 +977,9 @@ def test_toggle_group_check(document, comm):
 def test_toggle_group_radio(document, comm):
 
     for widget_type in ToggleGroup._widgets_type:
-        select = ToggleGroup(options=OrderedDict([('A', 'A'), ('1', 1), ('C', object)]),
-                               value=1, name='RadioButtonGroup',
-                               widget_type=widget_type, behavior='radio')
+        select = ToggleGroup(options={'A': 'A', '1': 1, 'C': object},
+                             value=1, name='RadioButtonGroup',
+                             widget_type=widget_type, behavior='radio')
 
         widget = select.get_root(document, comm=comm)
 
@@ -943,7 +989,7 @@ def test_toggle_group_radio(document, comm):
 
         widget.active = 2
         select._process_events({'active': 2})
-        assert select.value == object
+        assert select.value is object
 
         select.value = 'A'
         assert widget.active == 0

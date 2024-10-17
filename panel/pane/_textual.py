@@ -11,14 +11,8 @@ from textual.geometry import Size
 
 class PanelDriver(Driver):
 
-    def __init__(
-        self,
-        app: App,
-        *,
-        debug: bool = False,
-        size: tuple[int, int] | None = None
-    ) -> None:
-        super().__init__(app, debug=debug, size=size)
+    def __init__(self, app: App, /, **kwargs) -> None:
+        super().__init__(app, **kwargs)
         self._terminal = app.__panel__._terminal
         self._input_initialized = False
         self._input_watcher = None
@@ -83,7 +77,12 @@ class PanelDriver(Driver):
 
     def start_application_mode(self):
         self._size_watcher = self._terminal.param.watch(self._resize, ['nrows', 'ncols'])
-        self._parser = XTermParser(lambda: False, self._debug)
+        try:
+            # Textual < 0.76
+            self._parser = XTermParser(lambda: False, debug=self._debug)
+        except TypeError:
+            # Textual >= 0.76
+            self._parser = XTermParser(debug=self._debug)
         self._input_watcher = self._terminal.param.watch(self._process_input, 'value')
 
     def stop_application_mode(self):

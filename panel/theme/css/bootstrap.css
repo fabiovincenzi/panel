@@ -149,12 +149,36 @@ button.accordion-header {
   border-radius: 0;
 }
 
-:host(.card-header-row) .card-title {
-  margin: 0;
+.card-button {
+  line-height: 0.9em;
 }
 
-.card-header > .card-header-row {
-  margin-left: 15px;
+.card-title {
+  margin-bottom: 5px;
+}
+
+:host(.card-title) h1 {
+  font-size: 2em;
+}
+
+:host(.card-title) h2 {
+  font-size: 1.5em;
+}
+
+:host(.card-title) h3 {
+  font-size: 1.17em;
+}
+
+:host(.card-title) h4 {
+  font-size: 1em;
+}
+
+:host(.card-title) h5 {
+  font-size: 0.83em;
+}
+
+:host(.card-title) h6 {
+  font-size: 0.67em;
 }
 
 :host(.card-title) h1,
@@ -593,6 +617,15 @@ textarea.bk-input {
   --bs-btn-disabled-color: #fff;
   --bs-btn-disabled-bg: #212529;
   --bs-btn-disabled-border-color: #212529;
+}
+
+input[type='file'].bk-input {
+  padding-left: 10px;
+}
+
+input[type='file']::file-selector-button {
+  background: var(--bs-surface-bg);
+  color: var(--bs-surface-color);
 }
 
 .bk-menu {

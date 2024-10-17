@@ -112,10 +112,9 @@ import os
 import pathlib
 import sys
 
-os.environ['BOKEH_RESOURCES'] = 'server'
 app = r'{{ path }}'
 os.chdir(str(pathlib.Path(app).parent))
-sys.path = [os.getcwd()] + sys.path[1:]
+sys.path = [os.getcwd()] + sys.path
 
 from panel.io.jupyter_executor import PanelExecutor
 executor = PanelExecutor(app, '{{ token }}', '{{ root_url }}')
@@ -265,12 +264,10 @@ class PanelJupyterHandler(PanelBaseHandler):
 
         kernel_env = {**os.environ}
         kernel_id = await ensure_async(
-            (
-                self.kernel_manager.start_kernel(
-                    kernel_name=requested_kernel,
-                    path=cwd,
-                    env=kernel_env,
-                )
+            self.kernel_manager.start_kernel(
+                kernel_name=requested_kernel,
+                path=cwd,
+                env=kernel_env,
             )
         )
         kernel_future = self.kernel_manager.get_kernel(kernel_id)
